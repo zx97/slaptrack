@@ -1,32 +1,25 @@
-# Ignore everything by default
-/*
-
 # === Source files ===
-!*.h
-!*.hpp
-!*.cpp
-!Makefile
+*.h
+*.hpp
+*.cpp
+Makefile
 
 # === Documentation ===
-!*.md
-!/doc/
-!/doc/*.md
+*.md
+LICENSE
+.gitignore
 
-# === License ===
-!LICENSE
-
-# === Git ===
-!.gitignore
-
-# === Build artifacts (always ignored) ===
+# === Build artifacts ===
 *.o
 *.d
-slaptrack
 build_number.txt
+slaptrack
+build/
 
 # === Editor temporaries ===
 *~
 *.swp
 *.tmp
 
+# === Local symlinks (do not track) ===
 logs
