@@ -1,0 +1,151 @@
+// viewer.h
+
+/* 
+    SPDX-License-Identifier: AGPL-3.0-or-later
+    GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
+    Copyright (c) 2026 Manuel FLURY
+    All rights reserved.
+    
+    This file is part of slaptrack - an OpenLDAP Log Viewer.
+    
+    Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-or-later).
+    See the LICENSE file distributed with this work for full license text.
+    
+    THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+    AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
+#pragma once
+
+#include "log_buffer.h"
+#include "filter.h"
+#include <string>
+#include <vector>
+#include <optional>
+#include <chrono>
+#include <ncurses.h>
+
+class Viewer {
+public:
+    Viewer(const std::string& filename, bool followMode = false);
+    ~Viewer();
+    
+    void run();
+    void stop();
+    
+private:
+    void initTerminal();
+    void restoreTerminal();
+    void setupColors();
+    void setupSchema(int schema);
+    
+    void fullRedraw();
+    void drawContent();
+    void drawFilterBar();
+    void drawStatusBar();
+    void drawLine(int screenRow, const LogLine& line, size_t lineNum, bool isHighlighted);
+    void redrawLine(int cursorRow, bool isHighlighted);
+    
+    void handleInput();
+    void handleMouseEvent();
+    void handleFollowMode();
+    void handleCommandMode();
+    
+    void moveCursorUp();
+    void moveCursorDown();
+    void pageUp();
+    void pageDown();
+    void goToTop();
+    void goToBottom();
+    
+    void moveToLine(size_t lineNum);
+    void moveCursorToLineStart();
+    void moveCursorToLineEnd();
+    
+    std::optional<Token> getTokenAtCursor();
+    std::optional<Token> getTokenAtPosition(int row, int col);
+    std::optional<size_t> getTokenIndexAtPosition(int row, int col);
+    
+    void activateFilter();
+    void activateFilterAtPosition(int row, int col);
+    void deactivateFilter();
+    
+    void startSearch();
+    void performSearch(const std::string& query);
+    void nextSearchResult();
+    void prevSearchResult();
+    
+    void buildFilteredIndices();
+    size_t findConnectionStart(size_t fromLine, const std::string& connId);
+    size_t findConnectionEnd(size_t fromLine, const std::string& connId);
+    
+    void showPopup(const std::string& message, float progress);
+    void hidePopup();
+    
+    int getColorForToken(TokenType type);
+    void printToken(const Token& token, bool isCurrentToken, bool isHovered);
+    void printWrappedLine(const LogLine& line, size_t lineNum, int startRow, bool isHighlighted);
+    void printTruncatedLine(const LogLine& line, size_t lineNum, int row, bool isHighlighted);
+    
+    int calculateLineScreenRows(const LogLine& line);
+    void recalculateScreenRows();
+    int getScreenRowForCursorRow(int cursorRow);
+    int getCursorRowForScreenRow(int screenRow);
+    
+    std::string filename_;
+    bool followMode_;
+    LogBuffer buffer_;
+    std::vector<size_t> visibleIndices_;
+    FilterStack filterStack_;
+    
+    WINDOW* mainWindow_;
+    WINDOW* filterWindow_;
+    WINDOW* statusWindow_;
+    WINDOW* popupWindow_;
+    
+    int scrollOffset_;
+    int cursorRow_;
+    int cursorCol_;
+    int termWidth_;
+    int termHeight_;
+    bool running_;
+    
+    std::string searchQuery_;
+    std::vector<size_t> searchResults_;
+    size_t currentSearchResult_;
+    
+    std::chrono::steady_clock::time_point lastClickTime_;
+    int lastClickRow_;
+    int lastClickCol_;
+    
+    bool showLineNumbers_;
+    size_t currentTokenIndex_;
+    
+    int followFd_;
+    int followWatchFd_;
+    bool autoScroll_;
+    std::chrono::steady_clock::time_point lastFollowPoll_;
+    std::chrono::steady_clock::time_point filterStart_;
+    
+    bool wrapLines_;
+    std::vector<int> lineScreenRows_;
+    
+    int hoverRow_;
+    int hoverCol_;
+    bool mouseActive_;
+    
+    bool showPopup_;
+    std::string popupMessage_;
+    float popupProgress_;
+    bool filtering_;
+    
+    void drawPopup();
+
+    int currentSchema_;
+    bool autoColor_;
+    static const char* SCHEMA_NAMES[8];
+};
