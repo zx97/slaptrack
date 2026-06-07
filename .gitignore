@@ -1,0 +1,32 @@
+# Ignore everything by default
+/*
+
+# === Source files ===
+!*.h
+!*.hpp
+!*.cpp
+!Makefile
+
+# === Documentation ===
+!*.md
+!/doc/
+!/doc/*.md
+
+# === License ===
+!LICENSE
+
+# === Git ===
+!.gitignore
+
+# === Build artifacts (always ignored) ===
+*.o
+*.d
+slaptrack
+build_number.txt
+
+# === Editor temporaries ===
+*~
+*.swp
+*.tmp
+
+logs
