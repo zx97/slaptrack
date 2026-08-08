@@ -34,15 +34,17 @@ public:
     bool loadFile(const std::string& filename);
     size_t refreshFile();
 
-    // Close + re-open the underlying index file (log rotation).
+    // Close/re-open the index file (log rotation).
     bool reopenFile(const std::string& filename);
     
     size_t getTotalLines() const;
     std::optional<LogLine> getLine(size_t index);
     
-    // O(1) access to the raw line text.  Used by the filter loop to
-    // avoid the per-line fseek that getLine() triggers on a cache miss.
-    // Returns an empty string if the index is out of range.
+    // Access to the raw line text.  Only a bounded window of lines is
+    // kept in memory (rawWindowSize_); requesting a line outside that
+    // window reloads a fresh page from disk in one grouped read.  Used
+    // by the filter loop and the wrap-layout scan.  Returns an empty
+    // string if the index is out of range.
     const std::string& getRawLine(size_t index) const;
     
     // Expose the parser so the filter loop can parse raw lines
@@ -56,13 +58,18 @@ public:
     const LogIndex& getIndex() const { return index_; }
     
 private:
-    // Bulk-read every line of the file into memory at load time.
-    // This is what makes filter scans O(n) without 300K fseeks.
-    bool loadRawLines(const std::string& filename);
+    // Number of raw lines kept in memory at once.  This is the strict
+    // minimum needed: one screen/wrap window, not the whole file.
+    static constexpr size_t kRawWindowLines = 4096;
+    
+    void loadRawWindow(size_t startLine) const;
     
     LogIndex index_;
     LogParser parser_;
-    std::vector<std::string> rawLines_;
+    // Parsed-line cache (LRU-bounded by windowSize_).
     std::unordered_map<size_t, LogLine> cache_;
     size_t windowSize_;
+    // Raw text window: we never hold the whole file in RAM.
+    mutable size_t rawPageStart_ = 0;
+    mutable std::vector<std::string> rawLines_;
 };

@@ -94,6 +94,13 @@ public:
     LogFormat logFormat() const { return format_; }
 
     LogLine parseLine(const std::string& line);
+
+    // Cheap display-length of what parseLine()->raw would contain,
+    // without tokenizing (parseLine runs ~20 regexes).  Used by the
+    // wrap-layout code so toggling 'W' on a large file stays instant.
+    size_t renderedLength(const std::string& line) const {
+        return convertTimestamps(line).size();
+    }
     
 private:
     void extractTokens(LogLine& logLine);

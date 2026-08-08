@@ -99,8 +99,8 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 | Color | Component |
 |-------|-----------|
 | Cyan | Timestamp |
-| Orange | Connection ID (conn=) |
-| Purple | Operation ID (op=) |
+| Yellow | Connection ID (conn=) |
+| Magenta | Operation ID (op=) |
 | Magenta | Thread ID (0x...) |
 | Green | Distinguished Name (dn=) |
 | Yellow | Filter expression |

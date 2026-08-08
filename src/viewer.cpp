@@ -139,6 +139,10 @@ void Viewer::initTerminal() {
     mainWindow_ = newwin(termHeight_ - 2, termWidth_, 0, 0);
     filterWindow_ = newwin(1, termWidth_, termHeight_ - 2, 0);
     statusWindow_ = newwin(1, termWidth_, termHeight_ - 1, 0);
+
+    // Windows are created after the first setupColors() call, so apply
+    // the current theme's background now that mainWindow_ exists.
+    setupSchema(currentSchema_);
     
     keypad(mainWindow_, TRUE);
     timeout(10);
@@ -190,14 +194,24 @@ void Viewer::setupSchema(int schema) {
 
     struct SchemaColor { short fg; short bg; };
 
+    // Pair index layout (index -> COLOR_PAIR(index+1)):
+    //   0 TIMESTAMP | 1 CONN_ID | 2 THREAD/OP_ID | 3 DN_VALUE | 4 FILTER_VALUE
+    //   5 IP/KEYWORD | 6 ERROR_CODE | 7 FD_NUM | 8 TAG | 9 ETIME_VAL
+    //   10 NENTRIES | 11 QTIME_VAL | 12 SCOPE | 13 DEREF
+    //   14 line numbers | 15 base text | 16 popup | 17 ATTR | 18 ATTR_LIST | 19 BASE
+    //
+    // The per-token colours of F1 (Default) are the ones documented in the
+    // "Token colour mapping" table; the follow/pipe mode reuses exactly those
+    // colours, so F1 and follow mode always match.
+
     static const SchemaColor SCHEMAS[8][20] = {
-        // F1: Default (bright)
+        // F1: Default (bright) — documented token colours
         {
             {COLOR_CYAN,    -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
             {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_BLUE,    -1},
             {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_YELLOW,  -1},
             {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_BLACK,   -1},
+            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
             {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_BLUE,    -1},
         },
@@ -207,67 +221,75 @@ void Viewer::setupSchema(int schema) {
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1},
-            {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_BLACK,   -1},
+            {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1}, {COLOR_WHITE,   -1},
         },
-        // F3: Solarized Light (base03=bg 235, base0=content 244, base1=emph 147, yellow 136, orange 166, red 124, magenta 125, violet 61, blue 33, cyan 37, green 64)
+        // F3: Solarized Light — light background, warm accent colours
         {
-            {COLOR_BLUE,    -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
-            {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_BLUE,    -1},
-            {COLOR_RED,     -1}, {COLOR_BLUE,    -1}, {COLOR_YELLOW,  -1},
-            {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_BLACK,   -1},
-            {COLOR_BLUE,    -1}, {COLOR_WHITE,   COLOR_RED},
-            {COLOR_GREEN,   -1}, {COLOR_BLUE,    -1}, {COLOR_BLUE,    -1},
+            {COLOR_BLUE,    COLOR_WHITE}, {COLOR_MAGENTA, COLOR_WHITE},
+            {COLOR_MAGENTA, COLOR_WHITE}, {COLOR_GREEN,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLUE,    COLOR_WHITE},
+            {COLOR_RED,     COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_MAGENTA, COLOR_WHITE}, {COLOR_BLUE,    COLOR_WHITE},
+            {COLOR_GREEN,   COLOR_WHITE}, {COLOR_MAGENTA, COLOR_WHITE},
+            {COLOR_RED,     COLOR_WHITE}, {COLOR_BLUE,    COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_WHITE,   COLOR_RED},
+            {COLOR_GREEN,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLUE,    COLOR_WHITE},
         },
-        // F4: Solarized Dark (base03=bg 235, base0=content 244, base1=emph 147, yellow 136, orange 166, red 124, magenta 125, violet 61, blue 33, cyan 37, green 64)
+        // F4: Solarized Dark — dark background, muted accent colours
         {
             {COLOR_CYAN,    -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
             {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_BLUE,    -1},
-            {COLOR_RED,     -1}, {COLOR_BLUE,    -1}, {COLOR_YELLOW,  -1},
-            {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_BLACK,   -1},
-            {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
-            {COLOR_GREEN,   -1}, {COLOR_BLUE,    -1}, {COLOR_BLUE,    -1},
-        },
-        // F5: High Contrast (black text on white)
-        {
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1},
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1}, {COLOR_BLUE,    -1},
-            {COLOR_RED,     -1}, {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1},
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1},
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1}, {COLOR_BLACK,   COLOR_WHITE},
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   COLOR_RED},
-            {COLOR_BLACK,   -1}, {COLOR_BLACK,   -1}, {COLOR_BLUE,    -1},
-        },
-        // F6: Nord (polar night 15,4,8,9 / snow storm 7,6,5 / frost 10,14,15 / aurora 12,11,13)
-        {
-            {COLOR_CYAN,    -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
-            {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1},
             {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_YELLOW,  -1},
             {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_BLACK,   -1},
+            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
-            {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_CYAN,    -1},
+            {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_BLUE,    -1},
         },
-        // F7: Gruvbox (dark bg 235, light bg 229, dark1 241, dark3 246, light1 223, light3 250 / colors: red 124, green 142, yellow 136, blue 109, purple 175, aqua 108, orange 208, pink 219)
+        // F5: High Contrast — black text on a white background
+        {
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLUE,    COLOR_WHITE},
+            {COLOR_RED,     COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_WHITE,   COLOR_RED},
+            {COLOR_BLACK,   COLOR_WHITE}, {COLOR_BLACK,   COLOR_WHITE},
+            {COLOR_BLUE,    COLOR_WHITE},
+        },
+        // F6: Nord — cool grey-blue palette
+        {
+            {COLOR_CYAN,    -1}, {COLOR_BLUE,    -1}, {COLOR_CYAN,    -1},
+            {COLOR_GREEN,   -1}, {COLOR_CYAN,    -1}, {COLOR_BLUE,    -1},
+            {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_BLUE,    -1},
+            {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_CYAN,    -1},
+            {COLOR_BLUE,    -1}, {COLOR_CYAN,    -1}, {COLOR_WHITE,   -1},
+            {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
+            {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_BLUE,    -1},
+        },
+        // F7: Gruvbox — retro warm palette
         {
             {COLOR_YELLOW,  -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
             {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_BLUE,    -1},
             {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_YELLOW,  -1},
             {COLOR_YELLOW,  -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_YELLOW,  -1}, {COLOR_BLACK,   -1},
+            {COLOR_YELLOW,  -1}, {COLOR_YELLOW,  -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
             {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_BLUE,    -1},
         },
-        // F8: Dracula (bg 46,34,39 / fg 248,248,242 / comment 68,64,80 / red 237,80,74 / orange 255,140,0 / yellow 241,250,140 / green 80,250,123 / purple 189,147,249 / cyan 116,231,219 / pink 255,121,198)
+        // F8: Dracula — purple-pink accent palette
         {
-            {COLOR_CYAN,    -1}, {COLOR_YELLOW,  -1}, {COLOR_MAGENTA, -1},
+            {COLOR_MAGENTA, -1}, {COLOR_MAGENTA, -1}, {COLOR_MAGENTA, -1},
             {COLOR_GREEN,   -1}, {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1},
-            {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_YELLOW,  -1},
+            {COLOR_RED,     -1}, {COLOR_WHITE,   -1}, {COLOR_MAGENTA, -1},
             {COLOR_CYAN,    -1}, {COLOR_GREEN,   -1}, {COLOR_MAGENTA, -1},
-            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_BLACK,   -1},
+            {COLOR_YELLOW,  -1}, {COLOR_CYAN,    -1}, {COLOR_WHITE,   -1},
             {COLOR_WHITE,   -1}, {COLOR_WHITE,   COLOR_RED},
             {COLOR_GREEN,   -1}, {COLOR_WHITE,   -1}, {COLOR_CYAN,    -1},
         },
@@ -276,6 +298,9 @@ void Viewer::setupSchema(int schema) {
     const auto& s = SCHEMAS[schema];
     for (int i = 0; i < 20; i++) {
         init_pair(i + 1, s[i].fg, s[i].bg);
+    }
+    if (mainWindow_) {
+        wbkgd(mainWindow_, COLOR_PAIR(16));
     }
 }
 
@@ -326,7 +351,7 @@ void Viewer::run() {
     restoreTerminal();
 }
 
-void Viewer::fullRedraw() {
+void Viewer::fullRedraw(bool recomputeRows) {
     getmaxyx(stdscr, termHeight_, termWidth_);
     
     wresize(mainWindow_, termHeight_ - 2, termWidth_);
@@ -335,7 +360,9 @@ void Viewer::fullRedraw() {
     mvwin(filterWindow_, termHeight_ - 2, 0);
     mvwin(statusWindow_, termHeight_ - 1, 0);
     
-    recalculateScreenRows();
+    if (recomputeRows) {
+        recalculateScreenRows();
+    }
     drawContent();
     drawFilterBar();
     drawStatusBar();
@@ -368,17 +395,113 @@ void Viewer::recalculateScreenRows() {
     }
     
     for (size_t i = 0; i < visibleIndices_.size(); i++) {
-        auto line = buffer_.getLine(visibleIndices_[i]);
-        if (!line) {
+        const std::string& raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (raw.empty()) {
             lineScreenRows_.push_back(1);
             continue;
         }
         
-        int len = line->raw.length();
+        int len = (int)buffer_.getParser().renderedLength(raw);
         int rows = (len + contentWidth - 1) / contentWidth;
         if (rows < 1) rows = 1;
         lineScreenRows_.push_back(rows);
     }
+}
+
+void Viewer::toggleWrap() {
+    wrapLines_ = !wrapLines_;
+    
+    if (wrapLines_) {
+        // Turning wrap ON requires computing the on-screen row count of
+        // every visible line (O(n); large files only need a popup, and
+        // draw on-demand from the buffer — the file is not held fully
+        // in memory).
+        if (!computeWrappedScreenRowsWithProgress()) {
+            wrapLines_ = false;
+            lineScreenRows_.clear();
+            lineScreenRows_.resize(visibleIndices_.size(), 1);
+            fullRedraw();
+            return;
+        }
+    } else {
+        lineScreenRows_.clear();
+        lineScreenRows_.resize(visibleIndices_.size(), 1);
+    }
+    fullRedraw(false);
+}
+
+bool Viewer::computeWrappedScreenRowsWithProgress() {
+    lineScreenRows_.clear();
+    lineScreenRows_.reserve(visibleIndices_.size());
+    
+    int contentWidth = termWidth_;
+    if (showLineNumbers_) {
+        size_t totalLines = buffer_.getTotalLines();
+        int numWidth = std::to_string(totalLines).length() + 2;
+        contentWidth -= numWidth;
+    }
+    if (contentWidth < 1) contentWidth = 1;
+    
+    const size_t rangeSize = visibleIndices_.size();
+
+    showPopup("Wrapping lines... (Esc to cancel)", 0.0f);
+    touchwin(mainWindow_);
+    wnoutrefresh(mainWindow_);
+    touchwin(filterWindow_);
+    wnoutrefresh(filterWindow_);
+    touchwin(statusWindow_);
+    wnoutrefresh(statusWindow_);
+    doupdate();
+
+    nodelay(stdscr, TRUE);
+    g_interrupted = 0;
+    
+    bool cancelled = false;
+    size_t lastProgressLine = 0;
+    for (size_t i = 0; i < rangeSize; i++) {
+        if (g_interrupted) { cancelled = true; break; }
+        
+        const std::string& raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (raw.empty()) {
+            lineScreenRows_.push_back(1);
+        } else {
+            int len = (int)buffer_.getParser().renderedLength(raw);
+            int rows = (len + contentWidth - 1) / contentWidth;
+            if (rows < 1) rows = 1;
+            lineScreenRows_.push_back(rows);
+        }
+        
+        if (i - lastProgressLine >= 1000) {
+            lastProgressLine = i;
+            if (g_interrupted) { cancelled = true; break; }
+            int ch = getch();
+            if (ch != ERR) {
+                if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
+                    ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
+                    cancelled = true;
+                    g_interrupted = 1;
+                } else {
+                    ungetch(ch);
+                }
+            }
+            if (cancelled) break;
+            if (rangeSize > 0) {
+                float progress = (float)(i + 1) / (float)rangeSize;
+                if (progress > 1.0f) progress = 1.0f;
+                showPopup("Wrapping rows... (Esc to cancel)", progress);
+            }
+        }
+    }
+    
+    nodelay(stdscr, FALSE);
+    timeout(10);
+    
+    if (cancelled) {
+        hidePopupNoRedraw();
+        return false;
+    }
+    hidePopupNoRedraw();
+    return true;
 }
 
 int Viewer::calculateLineScreenRows(const LogLine& line) {
@@ -456,12 +579,14 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
     wmove(mainWindow_, row, 0);
     wclrtoeol(mainWindow_);
     
-    // Plain text between tokens must be rendered in the default
-    // attribute, not in whatever color the previous line's last token
-    // left active on the window.  Without this reset a syslog prefix
-    // ("Aug 06 05:19:02 host slapd[pid]:") inherits e.g. the bold blue
-    // of a keyword from the line above, making the palette look random.
-    wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
+    // Plain text between tokens must be rendered in the theme's base
+    // colour (pair 16), not in whatever color the previous line's last
+    // token left active on the window.  Without this reset a syslog
+    // prefix ("Aug 06 05:19:02 host slapd[pid]:") inherits e.g. the bold
+    // blue of a keyword from the line above, making the palette look
+    // random; and light themes (Solarized Light, High Contrast) would
+    // lose their white background outside the tokens.
+    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
     
     int col = 0;
     
@@ -489,7 +614,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
             if (col + (int)plainText.length() > termWidth_) {
                 plainText = plainText.substr(0, termWidth_ - col);
             }
-            wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
+            wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
             mvwprintw(mainWindow_, row, col, "%s", plainText.c_str());
             col += plainText.length();
         }
@@ -511,7 +636,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
     
     if (lastEnd < line.raw.length() && col < termWidth_) {
         std::string remaining = line.raw.substr(lastEnd, termWidth_ - col);
-        wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
+        wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
         mvwprintw(mainWindow_, row, col, "%s", remaining.c_str());
         col += remaining.length();
     }
@@ -547,9 +672,12 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
         }
     }
     
+    // The wrap renderer works on the same token stream as the
+    // truncated renderer, so the theme colours are preserved line by
+    // line.  The cursor row keeps its A_REVERSE tint.
     int col = 0;
     int row = startRow;
-    wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
+    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
     
     if (showLineNumbers_ && row < termHeight_ - 2) {
         size_t totalLines = buffer_.getTotalLines();
@@ -566,27 +694,67 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
         col = numWidth;
     }
     
-    std::string fullText = line.raw;
-    size_t pos = 0;
-    
-    while (pos < fullText.length() && row < termHeight_ - 2) {
-        int spaceLeft = contentWidth - (col - numWidth);
-        if (spaceLeft <= 0) {
-            row++;
-            col = numWidth;
-            spaceLeft = contentWidth;
+    size_t lastEnd = 0;
+    for (size_t i = 0; i < line.tokens.size() && row < termHeight_ - 2; i++) {
+        const auto& token = line.tokens[i];
+        
+        if (token.start_pos > lastEnd) {
+            std::string plainText = line.raw.substr(lastEnd, token.start_pos - lastEnd);
+            wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+            size_t pos = 0;
+            while (pos < plainText.length() && row < termHeight_ - 2) {
+                int spaceLeft = contentWidth - (col - numWidth);
+                if (spaceLeft <= 0) {
+                    row++;
+                    col = numWidth;
+                    spaceLeft = contentWidth;
+                }
+                size_t chunkLen = std::min((size_t)spaceLeft, plainText.length() - pos);
+                mvwprintw(mainWindow_, row, col, "%s", plainText.substr(pos, chunkLen).c_str());
+                col += chunkLen;
+                pos += chunkLen;
+            }
         }
         
-        size_t chunkLen = std::min((size_t)spaceLeft, fullText.length() - pos);
-        std::string chunk = fullText.substr(pos, chunkLen);
+        if (row >= termHeight_ - 2) break;
         
-        mvwprintw(mainWindow_, row, col, "%s", chunk.c_str());
-        col += chunkLen;
-        pos += chunkLen;
+        bool isCurrentToken = isHighlighted && (i == currentTokenIndex_);
+        bool isHovered = (row == hoverRow_ && col <= hoverCol_ && hoverCol_ < col + (int)token.value.length());
+        printToken(token, isCurrentToken, isHovered);
         
-        if (col >= termWidth_ && pos < fullText.length()) {
-            row++;
-            col = numWidth;
+        size_t pos = 0;
+        const std::string& val = token.value;
+        while (pos < val.length() && row < termHeight_ - 2) {
+            int spaceLeft = contentWidth - (col - numWidth);
+            if (spaceLeft <= 0) {
+                row++;
+                col = numWidth;
+                spaceLeft = contentWidth;
+            }
+            size_t chunkLen = std::min((size_t)spaceLeft, val.length() - pos);
+            mvwprintw(mainWindow_, row, col, "%s", val.substr(pos, chunkLen).c_str());
+            col += chunkLen;
+            pos += chunkLen;
+        }
+        
+        lastEnd = token.end_pos;
+    }
+    
+    if (lastEnd < line.raw.length() && row < termHeight_ - 2) {
+        std::string remaining = line.raw.substr(lastEnd);
+        wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+        size_t pos = 0;
+        while (pos < remaining.length() && row < termHeight_ - 2) {
+            int spaceLeft = contentWidth - (col - numWidth);
+            if (spaceLeft <= 0) {
+                row++;
+                col = numWidth;
+                spaceLeft = contentWidth;
+            }
+            size_t chunkLen = std::min((size_t)spaceLeft, remaining.length() - pos);
+            mvwprintw(mainWindow_, row, col, "%s", remaining.substr(pos, chunkLen).c_str());
+            col += chunkLen;
+            pos += chunkLen;
         }
     }
 }
@@ -779,6 +947,14 @@ void Viewer::hidePopup() {
     fullRedraw();
 }
 
+void Viewer::hidePopupNoRedraw() {
+    showPopup_ = false;
+    if (popupWindow_) {
+        delwin(popupWindow_);
+        popupWindow_ = nullptr;
+    }
+}
+
 void Viewer::handleInput() {
     int ch = wgetch(mainWindow_);
     
@@ -893,7 +1069,7 @@ void Viewer::handleInput() {
         case '#':
             showLineNumbers_ = !showLineNumbers_;
             recalculateScreenRows();
-            fullRedraw();
+            fullRedraw(false);
             break;
         case ':':
             handleCommandMode();
@@ -906,9 +1082,7 @@ void Viewer::handleInput() {
             break;
         case 'W':
         case 'w':
-            wrapLines_ = !wrapLines_;
-            recalculateScreenRows();
-            fullRedraw();
+            toggleWrap();
             break;
         case KEY_F(1): case KEY_F(2): case KEY_F(3): case KEY_F(4):
         case KEY_F(5): case KEY_F(6): case KEY_F(7): case KEY_F(8): {
