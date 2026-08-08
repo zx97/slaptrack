@@ -550,85 +550,117 @@ void Viewer::startWrapCompute(int contentWidth) {
 }
 
 void Viewer::stopWrapWorker() {
+    // std::thread::joinable() is not safe to test without synchronisation
+    // (the worker thread can finish in between the check and the join).
+    // We rely on wrapWorkerStop_/wrapJobPending_ under the mutex to flip
+    // the worker out of its wait, then join exactly once.
     {
         std::lock_guard<std::mutex> lk(wrapMutex_);
         if (!wrapWorker_.joinable()) {
+            // No worker to stop. Reset the bookkeeping so a future
+            // startWrapCompute() doesn't see stale state.
             wrapJobPending_ = false;
             return;
         }
         wrapWorkerStop_ = true;
-        wrapJobPending_ = true;
+        wrapJobPending_ = true;     // so the wait predicate fires
     }
     wrapCv_.notify_all();
     if (wrapWorker_.joinable()) {
-        wrapWorker_.join();
+        // join() can throw system_error on rare pthread failures; we
+        // swallow it because the only alternative is terminate().
+        try {
+            wrapWorker_.join();
+        } catch (const std::system_error&) {
+            // Best effort — drop the handle so we don't try to join
+            // it again.
+        }
     }
-    std::lock_guard<std::mutex> lk(wrapMutex_);
-    wrapWorkerStop_ = false;
-    wrapJobPending_ = false;
-    wrapWorker_ = std::thread();
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        wrapWorkerStop_ = false;
+        wrapJobPending_ = false;
+        // Detach the joined thread so a fresh start can spawn one.
+        wrapWorker_ = std::thread();
+    }
 }
 
 void Viewer::wrapWorkerMain() {
     static constexpr size_t kBatch = 256;
     static constexpr auto kYield = std::chrono::milliseconds(1);
 
-    std::unique_lock<std::mutex> lk(wrapMutex_);
-    while (true) {
-        wrapCv_.wait(lk, [&] {
-            return wrapWorkerStop_ || wrapJobPending_;
-        });
-        if (wrapWorkerStop_) {
-            return;
-        }
-        wrapJobPending_ = false;
+    // Top-level try/catch: an uncaught exception in a std::thread
+    // body calls std::terminate → SIGABRT.  Anything thrown by the
+    // buffer / parser (e.g. bad_alloc on the snapshot copy, mutex
+    // errors from a destroyed LogBuffer) must be caught here so the
+    // process keeps running.  We log to stderr and exit the loop.
+    try {
+        std::unique_lock<std::mutex> lk(wrapMutex_);
+        while (true) {
+            wrapCv_.wait(lk, [&] {
+                return wrapWorkerStop_ || wrapJobPending_;
+            });
+            if (wrapWorkerStop_) {
+                return;
+            }
+            wrapJobPending_ = false;
 
-        const uint64_t jobGen = wrapGen_;
-        const std::vector<size_t> snapshot = wrapSnapshot_;
-        const int width = wrapWidth_;
-        const size_t total = snapshot.size();
-        lk.unlock();
+            const uint64_t jobGen = wrapGen_;
+            const std::vector<size_t> snapshot = wrapSnapshot_;
+            const int width = wrapWidth_;
+            const size_t total = snapshot.size();
+            lk.unlock();
 
-        for (size_t cur = 0; cur < total; ) {
-            const size_t end = std::min(cur + kBatch, total);
-            std::vector<int> batch;
-            batch.reserve(end - cur);
-            for (size_t i = cur; i < end; i++) {
-                std::optional<std::string> raw = buffer_.getRawLine(snapshot[i]);
-                if (!raw) {
-                    batch.push_back(1);
-                    continue;
+            for (size_t cur = 0; cur < total; ) {
+                const size_t end = std::min(cur + kBatch, total);
+                std::vector<int> batch;
+                batch.reserve(end - cur);
+                for (size_t i = cur; i < end; i++) {
+                    std::optional<std::string> raw = buffer_.getRawLine(snapshot[i]);
+                    if (!raw) {
+                        batch.push_back(1);
+                        continue;
+                    }
+                    int len = (int)buffer_.getParser().renderedLength(*raw);
+                    int rows = (len + width - 1) / width;
+                    if (rows < 1) rows = 1;
+                    batch.push_back(rows);
                 }
-                int len = (int)buffer_.getParser().renderedLength(*raw);
-                int rows = (len + width - 1) / width;
-                if (rows < 1) rows = 1;
-                batch.push_back(rows);
+
+                lk.lock();
+                // If a newer job was queued (W toggled, filter applied,
+                // resize, …) abandon this one — startWrapCompute() has
+                // already cleared the cache and bumped the generation.
+                if (wrapGen_ != jobGen) {
+                    lk.unlock();
+                    break;
+                }
+                lineScreenRows_.insert(lineScreenRows_.end(),
+                                       batch.begin(), batch.end());
+                lk.unlock();
+                cur = end;
+                if (cur < total) {
+                    // 1 ms is well below wgetch's 10 ms timeout, so the UI
+                    // thread is never starved between batches.
+                    std::this_thread::sleep_for(kYield);
+                }
             }
 
             lk.lock();
-            // If a newer job was queued (W toggled, filter applied,
-            // resize, …) abandon this one — startWrapCompute() has
-            // already cleared the cache and bumped the generation.
-            if (wrapGen_ != jobGen) {
-                lk.unlock();
-                break;
+            if (wrapGen_ == jobGen) {
+                wrapCompletedGen_ = jobGen;
             }
-            lineScreenRows_.insert(lineScreenRows_.end(),
-                                   batch.begin(), batch.end());
             lk.unlock();
-            cur = end;
-            if (cur < total) {
-                // 1 ms is well below wgetch's 10 ms timeout, so the UI
-                // thread is never starved between batches.
-                std::this_thread::sleep_for(kYield);
-            }
         }
-
-        lk.lock();
-        if (wrapGen_ == jobGen) {
-            wrapCompletedGen_ = jobGen;
-        }
-        lk.unlock();
+    } catch (const std::exception& e) {
+        // Don't let an exception out of the worker body abort the
+        // whole process.  Log to stderr (ncurses isn't safe to touch
+        // from this thread).
+        std::fprintf(stderr,
+                     "slaptrack: wrap worker terminated: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr,
+                     "slaptrack: wrap worker terminated: unknown\n");
     }
 }
 
