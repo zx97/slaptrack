@@ -157,24 +157,22 @@ private:
     std::vector<int> lineScreenRows_;
 
     // ---- Background wrap-row computation ----
-    // One worker thread per compute job.  startWrapCompute() spawns a
-    // new thread (joining the previous one if any); the thread runs
-    // wrapRunOneJob to completion, then exits.  The cache state is
-    // guarded by wrapMutex_:
-    //   wrapSnapshot_  — UI-owned copy of visibleIndices_ at job start
-    //   wrapWidth_     — content width captured at job start
-    //   wrapDone_      — true once the current snapshot has been fully
-    //                    computed (or the cache is empty)
+    // Worker is spawned by startWrapCompute() and runs to completion.
+    // The main thread never joins it at runtime (would block the UI on
+    // disk reads); stopWrapWorker() only sets wrapStopRequested_ and the
+    // worker exits at the next batch boundary.  ~Viewer() joins.
     std::thread wrapWorker_;
+    std::atomic<bool> wrapStopRequested_{false};
     mutable std::mutex wrapMutex_;
     int wrapWidth_ = 0;
     std::vector<size_t> wrapSnapshot_;
     bool wrapDone_ = true;
-    int wrapPopupPct_ = -1;               // last progress percent drawn
+    int wrapPopupPct_ = -1;
     
     int hoverRow_;
     int hoverCol_;
     bool mouseActive_;
+    std::chrono::steady_clock::time_point lastPumpRecovery_ = {};
     
     bool showPopup_;
     std::string popupMessage_;

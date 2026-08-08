@@ -93,6 +93,9 @@ Viewer::Viewer(const std::string& filename, bool followMode, LogFormat logFormat
 
 Viewer::~Viewer() {
     stopWrapWorker();
+    if (wrapWorker_.joinable()) {
+        wrapWorker_.join();
+    }
     if (followFd_ >= 0) {
         if (followWatchFd_ >= 0) {
             inotify_rm_watch(followFd_, followWatchFd_);
@@ -521,12 +524,14 @@ void Viewer::startWrapCompute(int contentWidth) {
     // One worker thread per job.  If a previous job is still running
     // (user toggled W again before the first compute finished), join
     // it first so we don't have two threads appending to lineScreenRows_.
-    stopWrapWorker();
+    if (wrapWorker_.joinable()) {
+        wrapStopRequested_.store(true);
+        wrapWorker_.detach();
+    }
+    wrapStopRequested_.store(false);
 
     {
         std::lock_guard<std::mutex> lk(wrapMutex_);
-        // Cache already in sync with the requested parameters: nothing
-        // to do.
         if (wrapWidth_ == contentWidth
             && wrapDone_
             && wrapSnapshot_ == visibleIndices_) {
@@ -543,9 +548,7 @@ void Viewer::startWrapCompute(int contentWidth) {
 }
 
 void Viewer::stopWrapWorker() {
-    if (wrapWorker_.joinable()) {
-        wrapWorker_.join();
-    }
+    wrapStopRequested_.store(true);
 }
 
 void Viewer::wrapRunOneJob() {
@@ -570,6 +573,9 @@ void Viewer::wrapRunOneJob() {
         }
 
         for (size_t cur = 0; cur < total; ) {
+            if (wrapStopRequested_.load()) {
+                return;
+            }
             const size_t end = std::min(cur + kBatch, total);
             std::vector<int> batch;
             batch.reserve(end - cur);
@@ -587,11 +593,9 @@ void Viewer::wrapRunOneJob() {
 
             {
                 std::lock_guard<std::mutex> lk(wrapMutex_);
-                // If the main thread restarted the job (W toggled, …)
-                // it already cleared the cache and replaced wrapSnapshot_
-                // with the new one.  Discard our batch and exit so we
-                // don't overwrite fresh data.
-                if (wrapWidth_ != width || wrapSnapshot_ != snapshot) {
+                if (wrapStopRequested_.load()
+                    || wrapWidth_ != width
+                    || wrapSnapshot_ != snapshot) {
                     return;
                 }
                 lineScreenRows_.insert(lineScreenRows_.end(),
@@ -599,8 +603,6 @@ void Viewer::wrapRunOneJob() {
             }
             cur = end;
             if (cur < total) {
-                // 1 ms is well below wgetch's 10 ms timeout, so the UI
-                // thread is never starved between batches.
                 std::this_thread::sleep_for(kYield);
             }
         }
@@ -641,10 +643,16 @@ void Viewer::pumpWrapProgress() {
         (size_t)scrollOffset_ + (size_t)(termHeight_ - 2), total);
 
     // If the worker died (no thread running, not done, cache incomplete)
-    // recover by kicking a fresh compute.  Without this guard the UI
-    // would loop forever on a stale "Computing wrap…" popup.
+    // recover by kicking a fresh compute, but rate-limit to once per
+    // second — otherwise a worker that dies immediately for any reason
+    // would cause the pump to spin at 100% CPU and freeze the UI.
     if (!done && !workerAlive && have < needed) {
-        recalculateScreenRows();
+        const auto now = std::chrono::steady_clock::now();
+        if (lastPumpRecovery_.time_since_epoch().count() == 0
+            || now - lastPumpRecovery_ >= std::chrono::seconds(1)) {
+            lastPumpRecovery_ = now;
+            recalculateScreenRows();
+        }
         return;
     }
 
@@ -875,7 +883,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
     size_t lastEnd = 0;
     for (size_t i = 0; i < line.tokens.size() && row < termHeight_ - 2; i++) {
         const auto& token = line.tokens[i];
-        
+
         if (token.start_pos > lastEnd) {
             std::string plainText = line.raw.substr(lastEnd, token.start_pos - lastEnd);
             wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
@@ -885,7 +893,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
                 if (spaceLeft <= 0) {
                     row++;
                     col = numWidth;
-                    spaceLeft = contentWidth;
+                    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
                 }
                 size_t chunkLen = std::min((size_t)spaceLeft, plainText.length() - pos);
                 mvwprintw(mainWindow_, row, col, "%s", plainText.substr(pos, chunkLen).c_str());
@@ -893,13 +901,13 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
                 pos += chunkLen;
             }
         }
-        
+
         if (row >= termHeight_ - 2) break;
-        
+
         bool isCurrentToken = isHighlighted && (i == currentTokenIndex_);
         bool isHovered = (row == hoverRow_ && col <= hoverCol_ && hoverCol_ < col + (int)token.value.length());
         printToken(token, isCurrentToken, isHovered);
-        
+
         size_t pos = 0;
         const std::string& val = token.value;
         while (pos < val.length() && row < termHeight_ - 2) {
@@ -907,17 +915,17 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
             if (spaceLeft <= 0) {
                 row++;
                 col = numWidth;
-                spaceLeft = contentWidth;
+                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
             }
             size_t chunkLen = std::min((size_t)spaceLeft, val.length() - pos);
             mvwprintw(mainWindow_, row, col, "%s", val.substr(pos, chunkLen).c_str());
             col += chunkLen;
             pos += chunkLen;
         }
-        
+
         lastEnd = token.end_pos;
     }
-    
+
     if (lastEnd < line.raw.length() && row < termHeight_ - 2) {
         std::string remaining = line.raw.substr(lastEnd);
         wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
@@ -927,7 +935,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
             if (spaceLeft <= 0) {
                 row++;
                 col = numWidth;
-                spaceLeft = contentWidth;
+                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
             }
             size_t chunkLen = std::min((size_t)spaceLeft, remaining.length() - pos);
             mvwprintw(mainWindow_, row, col, "%s", remaining.substr(pos, chunkLen).c_str());
@@ -935,6 +943,14 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
             pos += chunkLen;
         }
     }
+
+    // Reset all attributes we may have set so the next line drawn
+    // (possibly by another code path) doesn't inherit e.g. a leftover
+    // A_BOLD or COLOR_PAIR from the last token — that's the colour
+    // "bleed" across lines.
+    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+    wattroff(mainWindow_, A_BOLD);
+    wattroff(mainWindow_, A_UNDERLINE);
 }
 
 void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered) {
