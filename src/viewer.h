@@ -45,7 +45,7 @@ private:
     void setupColors();
     void setupSchema(int schema);
     
-    void fullRedraw();
+    void fullRedraw(bool recomputeRows = true);
     void drawContent();
     void drawFilterBar();
     void drawStatusBar();
@@ -56,6 +56,9 @@ private:
     void handleMouseEvent();
     void handleFollowMode();
     void handleCommandMode();
+    
+    void toggleWrap();
+    bool computeWrappedScreenRowsWithProgress();
     
     void moveCursorUp();
     void moveCursorDown();
@@ -82,11 +85,13 @@ private:
     
     void buildFilteredIndices();
     bool linePassesFilters(size_t lineIndex);
+    std::vector<size_t> scanLines(size_t scanStart, size_t scanEnd, bool& cancelled);
     size_t findConnectionStart(size_t fromLine, const std::string& connId);
     size_t findConnectionEnd(size_t fromLine, const std::string& connId);
     
     void showPopup(const std::string& message, float progress);
     void hidePopup();
+    void hidePopupNoRedraw();
     
     int getColorForToken(TokenType type);
     void printToken(const Token& token, bool isCurrentToken, bool isHovered);

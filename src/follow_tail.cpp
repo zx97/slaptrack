@@ -483,49 +483,54 @@ void printAnsiLine(const std::string& rawLine, int schema, LogFormat logFormat) 
 } // namespace
 
 FollowTailStdin::FollowTailStdin(int schema, LogFormat logFormat)
-    : terminalRaw_(false), schema_(schema), logFormat_(logFormat) {}
+    : schema_(schema), logFormat_(logFormat) {}
 
-void FollowTailStdin::run() {
+void FollowTailStdin::detectColorSupport() {
     const char* term = std::getenv("TERM");
-    bool supportsColor = true;
     if (!term || std::strcmp(term, "dumb") == 0) {
-        supportsColor = false;
-    } else {
-        FILE* tputf = popen("tput colors 2>/dev/null", "r");
-        if (tputf) {
-            int colors = 0;
-            if (fscanf(tputf, "%d", &colors) == 1 && colors < 8) {
-                supportsColor = false;
-            }
-            pclose(tputf);
-        }
+        schema_ = 1;
+        return;
     }
-    if (!supportsColor) {
+    FILE* tputf = popen("tput colors 2>/dev/null", "r");
+    if (!tputf) return;
+    int colors = 0;
+    if (fscanf(tputf, "%d", &colors) == 1 && colors < 8) {
         schema_ = 1;
     }
+    pclose(tputf);
+}
 
-    struct termios oldTio, newTio;
-    bool haveTio = (tcgetattr(STDIN_FILENO, &oldTio) == 0);
-    if (haveTio) {
-        newTio = oldTio;
-        newTio.c_lflag &= ~(ICANON | ECHO);
-        newTio.c_cc[VMIN] = 0;
-        newTio.c_cc[VTIME] = 0;
-        if (tcsetattr(STDIN_FILENO, TCSANOW, &newTio) == 0) {
-            terminalRaw_ = true;
-        }
+bool FollowTailStdin::setupTerminal() {
+    struct termios newTio;
+    if (tcgetattr(STDIN_FILENO, &newTio) != 0) return false;
+    newTio.c_lflag &= ~(ICANON | ECHO);
+    newTio.c_cc[VMIN] = 0;
+    newTio.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &newTio) == 0) {
+        terminalRaw_ = true;
+        return true;
     }
+    return false;
+}
 
+void FollowTailStdin::restoreTerminal() const {
+    if (!terminalRaw_) return;
+    struct termios oldTio;
+    tcgetattr(STDIN_FILENO, &oldTio);
+    oldTio.c_lflag |= ICANON | ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldTio);
+}
+
+void FollowTailStdin::setupSignals() {
     struct sigaction sa;
     sa.sa_handler = followSignalHandler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
+}
 
-    std::cout << "\x1b[2m\x1b[37m--- reading stdin (tail -f | slaptrack -) Ctrl+C or q to quit ---\x1b[0m\n";
-    std::cout.flush();
-
+void FollowTailStdin::drainStdin() {
     std::string carry;
     while (g_followRunning) {
         struct pollfd fds[1];
@@ -558,9 +563,18 @@ void FollowTailStdin::run() {
         }
         carry.erase(0, start);
     }
+}
 
-    if (terminalRaw_ && haveTio) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &oldTio);
-    }
+void FollowTailStdin::run() {
+    detectColorSupport();
+    setupTerminal();
+    setupSignals();
+
+    std::cout << "\x1b[2m\x1b[37m--- reading stdin (tail -f | slaptrack -) Ctrl+C or q to quit ---\x1b[0m\n";
+    std::cout.flush();
+
+    drainStdin();
+
+    restoreTerminal();
     std::cout << "\x1b[0m\n";
 }

@@ -32,48 +32,62 @@ bool LogBuffer::loadFile(const std::string& filename) {
     if (!index_.buildIndex(filename)) {
         return false;
     }
-    // Bulk-read all lines into memory so filter scans do not fseek
-    // for every line they visit.
-    return loadRawLines(filename);
+    // Load the first window so the initial screen renders without a
+    // disk round-trip; the rest of the file is read only on demand.
+    loadRawWindow(0);
+    return true;
 }
 
-bool LogBuffer::loadRawLines(const std::string& filename) {
-    std::ifstream f(filename, std::ios::binary);
-    if (!f.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        return false;
+void LogBuffer::loadRawWindow(size_t startLine) const {
+    const size_t total = index_.getTotalLines();
+    if (startLine >= total) {
+        rawPageStart_ = startLine;
+        rawLines_.clear();
+        return;
     }
 
-    const size_t total = index_.getTotalLines();
-    rawLines_.clear();
-    rawLines_.reserve(total);
+    rawPageStart_ = startLine;
+    const size_t count = std::min(kRawWindowLines, total - startLine);
+    std::ifstream f(index_.getFilename(), std::ios::binary);
+    if (!f.is_open()) {
+        std::cerr << "Error: Could not open file " << index_.getFilename() << std::endl;
+        rawLines_.clear();
+        return;
+    }
+    f.seekg(index_.getLineOffset(startLine));
 
+    rawLines_.clear();
+    rawLines_.reserve(count);
     std::string line;
-    while (std::getline(f, line)) {
+    while (rawLines_.size() < count && std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
         rawLines_.push_back(std::move(line));
     }
-
-    return true;
 }
 
 size_t LogBuffer::refreshFile() {
     size_t newLines = index_.refreshIndex();
-    if (newLines > 0) {
-        // Append the new lines to rawLines_ so the filter sees them.
-        const size_t prev = rawLines_.size();
-        rawLines_.resize(index_.getTotalLines());
-        // We need the actual text.  Reopen and seek to where we left off.
+    if (newLines == 0) {
+        return 0;
+    }
+    // The file grew: shift the raw window so it covers the end of the
+    // file where follow mode keeps reading.  Lines behind the window
+    // are re-read from disk only if the user actually scrolls to them.
+    const size_t total = index_.getTotalLines();
+    const size_t pageStart = total > kRawWindowLines ? total - kRawWindowLines : 0;
+    if (pageStart != rawPageStart_) {
+        loadRawWindow(pageStart);
+    } else {
+        rawLines_.resize(total - rawPageStart_);
         std::ifstream f(index_.getFilename(), std::ios::binary);
         if (f.is_open()) {
-            f.seekg(prev > 0 ? index_.getLineOffset(prev) : 0);
-            for (size_t i = prev; i < rawLines_.size(); i++) {
-                std::string line;
-                if (!std::getline(f, line)) break;
+            f.seekg(index_.getLineOffset(rawPageStart_ + rawLines_.size()));
+            std::string line;
+            while (rawLines_.size() < total - rawPageStart_ && std::getline(f, line)) {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                rawLines_[i] = std::move(line);
+                rawLines_.push_back(std::move(line));
             }
         }
     }
@@ -86,23 +100,31 @@ bool LogBuffer::reopenFile(const std::string& filename) {
     if (!index_.reopen(filename)) {
         return false;
     }
-    return loadRawLines(filename);
+    loadRawWindow(0);
+    return true;
 }
 
 size_t LogBuffer::getTotalLines() const {
     return index_.getTotalLines();
 }
 
-const std::string& LogBuffer::getRawLine(size_t index) const {
-    static const std::string empty;
-    if (index >= rawLines_.size()) {
-        return empty;
+std::optional<std::string> LogBuffer::getRawLine(size_t index) const {
+    const size_t total = index_.getTotalLines();
+    if (index >= total) {
+        return std::nullopt;
     }
-    return rawLines_[index];
+    if (index < rawPageStart_ || index >= rawPageStart_ + rawLines_.size()) {
+        loadRawWindow(index);
+    }
+    const size_t offset = index - rawPageStart_;
+    if (offset >= rawLines_.size()) {
+        return std::nullopt;
+    }
+    return rawLines_[offset];
 }
 
 std::optional<LogLine> LogBuffer::getLine(size_t index) {
-    if (index >= rawLines_.size()) {
+    if (index >= index_.getTotalLines()) {
         return std::nullopt;
     }
     
@@ -111,12 +133,12 @@ std::optional<LogLine> LogBuffer::getLine(size_t index) {
         return it->second;
     }
     
-    const std::string& rawLine = rawLines_[index];
-    if (rawLine.empty()) {
+    std::optional<std::string> rawLine = getRawLine(index);
+    if (!rawLine) {
         return std::nullopt;
     }
     
-    LogLine parsed = parser_.parseLine(rawLine);
+    LogLine parsed = parser_.parseLine(*rawLine);
     cache_[index] = parsed;
     
     if (cache_.size() > windowSize_ * 2) {
