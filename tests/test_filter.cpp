@@ -12,6 +12,7 @@ static LogLine makeLine(FilterType type, const std::string& value) {
         case FilterType::OP: l.op_id = value; break;
         case FilterType::BASE: l.base = value; break;
         case FilterType::ERROR_CODE: l.error_code = value; break;
+        case FilterType::THREAD: l.thread_id = value; break;
         case FilterType::TEXT: l.raw = value; break;
     }
     return l;
@@ -34,6 +35,19 @@ TEST(filter_text_matches) {
     Filter f{FilterType::TEXT, "text", "needle"};
     CHECK(f.matches(makeLine(FilterType::TEXT, "haystack needle haystack")));
     CHECK(!f.matches(makeLine(FilterType::TEXT, "haystack")));
+}
+
+TEST(filter_thread_matches) {
+    Filter f{FilterType::THREAD, "thread", "0x7f9c1e33a700"};
+    CHECK(f.matches(makeLine(FilterType::THREAD, "0x7f9c1e33a700")));
+    CHECK(!f.matches(makeLine(FilterType::THREAD, "0x7f9c1e33b800")));
+    CHECK(!f.matches(LogLine{})); // no thread_id present
+}
+
+TEST(candidate_in_raw_thread) {
+    Filter f{FilterType::THREAD, "thread", "0x7f9c1e33a700"};
+    CHECK(f.candidateInRaw("... 0x7f9c1e33a700 conn=3 ..."));
+    CHECK(!f.candidateInRaw("... 0x7f9c1e33b800 conn=3 ..."));
 }
 
 TEST(filter_range) {

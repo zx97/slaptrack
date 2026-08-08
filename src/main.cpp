@@ -29,7 +29,7 @@
 #include <string>
 #include <unistd.h>
 
-#define SLAPTRACK_VERSION "1.3.0"
+#define SLAPTRACK_VERSION "1.3.1"
 
 namespace {
 

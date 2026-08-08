@@ -73,7 +73,24 @@ void LogParser::extractTokens(LogLine& logLine) {
         logLine.tokens.push_back(createToken(TokenType::TIMESTAMP, match[0], match.position(0), match.position(0) + match.length(0)));
     }
 
+    // Thread-id: OpenLDAP debug/access logs print the emitting thread as
+    // `0x…` right after the timestamp (`<rfc3339> <thread> conn=...`).
+    // Only match that head-of-line position so pointer addresses that
+    // appear *inside* the message body (e.g. `_csn: queueing 0x...`) are
+    // not treated as a thread.  The pattern also only fires on the
+    // decoded rfc3339 form, so syslog peer lines (hostname follows the
+    // stamp) never match.
+    static const std::regex thread_regex(
+        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+(0x[0-9a-fA-F]{8,16}))");
     std::string::const_iterator searchStart = line.cbegin();
+    while (std::regex_search(searchStart, line.cend(), match, thread_regex)) {
+        size_t threadStart = std::distance(line.cbegin(), searchStart) + match.position(1);
+        logLine.tokens.push_back(createToken(TokenType::THREAD_ID, match[1], threadStart, threadStart + match[1].length()));
+        logLine.thread_id = match[1].str();
+        searchStart = match.suffix().first;
+    }
+
+    searchStart = line.cbegin();
     while (std::regex_search(searchStart, line.cend(), match, conn_regex)) {
         size_t start = std::distance(line.cbegin(), searchStart) + match.position(0);
         logLine.tokens.push_back(createToken(TokenType::CONN_ID, match[0], start, start + match.length(0)));
@@ -266,10 +283,12 @@ std::string LogParser::convertTimestamps(const std::string& line) const {
 
         case LogFormat::AUTO:
         default:
-            // Auto-detection: only unambiguous prefixes are converted.
-            // rfc3339 is left untouched; syslog UTC vs localtime cannot be
-            // told apart without a flag, so it is only handled explicitly.
+            // Auto-detection: convert whichever unambiguous prefix the
+            // line has.  rfc3339 is left untouched; syslog UTC vs
+            // localtime cannot be told apart without a flag, so AUTO
+            // treats syslog as UTC.
             if (looksLikeDebugHex(line)) return convertDebugHex(line);
+            if (looksLikeSyslog(line)) return convertSyslog(line, /*local*/ false);
             return line;
     }
 }
@@ -278,6 +297,13 @@ bool LogParser::looksLikeDebugHex(const std::string& line) const {
     static const std::regex debug_prefix(R"(^[0-9a-fA-F]+\.[0-9a-fA-F]{5,8}[ \t]+)");
     std::smatch m;
     return std::regex_search(line, m, debug_prefix) && m.position(0) == 0;
+}
+
+bool LogParser::looksLikeSyslog(const std::string& line) const {
+    static const std::regex syslog_prefix(
+        R"(^[A-Za-z]{3}[ ]+[0-9]{1,2}[ ]+[0-9]{2}:[0-9]{2}:[0-9]{2}[ ]+)");
+    std::smatch m;
+    return std::regex_search(line, m, syslog_prefix) && m.position(0) == 0;
 }
 
 std::string LogParser::convertDebugHex(const std::string& line) const {

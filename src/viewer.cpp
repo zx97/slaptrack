@@ -282,6 +282,7 @@ void Viewer::setupSchema(int schema) {
 int Viewer::getColorForToken(TokenType type) {
     switch (type) {
         case TokenType::TIMESTAMP: return 1;
+        case TokenType::THREAD_ID: return 3;
         case TokenType::CONN_ID: return 2;
         case TokenType::OP_ID: return 3;
         case TokenType::DN_VALUE: return 4;
@@ -455,9 +456,12 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
     wmove(mainWindow_, row, 0);
     wclrtoeol(mainWindow_);
     
-    if (isHighlighted) {
-        wattron(mainWindow_, A_REVERSE);
-    }
+    // Plain text between tokens must be rendered in the default
+    // attribute, not in whatever color the previous line's last token
+    // left active on the window.  Without this reset a syslog prefix
+    // ("Aug 06 05:19:02 host slapd[pid]:") inherits e.g. the bold blue
+    // of a keyword from the line above, making the palette look random.
+    wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
     
     int col = 0;
     
@@ -485,6 +489,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
             if (col + (int)plainText.length() > termWidth_) {
                 plainText = plainText.substr(0, termWidth_ - col);
             }
+            wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
             mvwprintw(mainWindow_, row, col, "%s", plainText.c_str());
             col += plainText.length();
         }
@@ -506,6 +511,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
     
     if (lastEnd < line.raw.length() && col < termWidth_) {
         std::string remaining = line.raw.substr(lastEnd, termWidth_ - col);
+        wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
         mvwprintw(mainWindow_, row, col, "%s", remaining.c_str());
         col += remaining.length();
     }
@@ -543,6 +549,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
     
     int col = 0;
     int row = startRow;
+    wattrset(mainWindow_, isHighlighted ? A_REVERSE : A_NORMAL);
     
     if (showLineNumbers_ && row < termHeight_ - 2) {
         size_t totalLines = buffer_.getTotalLines();
@@ -610,6 +617,7 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
 
     if (token.type == TokenType::CONN_ID ||
         token.type == TokenType::OP_ID ||
+        token.type == TokenType::THREAD_ID ||
         token.type == TokenType::DN_VALUE ||
         token.type == TokenType::ERROR_CODE ||
         token.type == TokenType::KEYWORD ||
@@ -1200,6 +1208,11 @@ void Viewer::activateFilter() {
             filter.key = "op";
             filter.value = token->value.substr(3);
             break;
+        case TokenType::THREAD_ID:
+            filter.type = FilterType::THREAD;
+            filter.key = "thread";
+            filter.value = token->value;
+            break;
         case TokenType::ERROR_CODE:
             filter.type = FilterType::ERROR_CODE;
             filter.key = "err";
@@ -1293,6 +1306,9 @@ void Viewer::startSearch() {
                 break;
             case TokenType::ERROR_CODE:
                 prefill = token->value.substr(4);
+                break;
+            case TokenType::THREAD_ID:
+                prefill = token->value;
                 break;
             default:
                 break;

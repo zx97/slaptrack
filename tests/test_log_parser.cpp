@@ -180,6 +180,37 @@ TEST(format_debug_keeps_thread_id) {
     CHECK_EQ(l.raw, "1970-01-01T00:00:01.074565Z 0x7f9c1e33a700 conn=3");
 }
 
+TEST(tokens_extract_thread_id) {
+    // The debug thread-id (`0x…` right after the timestamp) must be
+    // tokenized so the viewer can filter on it.
+    LogParser p;
+    p.setLogFormat(LogFormat::DEBUG);
+    LogLine l = p.parseLine("1.12345 0x7f9c1e33a700 conn=3");
+    CHECK(l.thread_id.has_value());
+    CHECK_EQ(l.thread_id.value(), "0x7f9c1e33a700");
+    bool found = false;
+    for (const auto& t : l.tokens) {
+        if (t.type == TokenType::THREAD_ID) {
+            found = true;
+            CHECK_EQ(t.value, "0x7f9c1e33a700");
+        }
+    }
+    CHECK(found);
+}
+
+TEST(tokens_no_thread_id_in_plain_lines) {
+    // Pointer addresses inside the message body (e.g. slap_queue_csn)
+    // are not at the head-of-line position and must NOT become a
+    // thread-id token.
+    LogParser p;
+    p.setLogFormat(LogFormat::AUTO);
+    LogLine l = p.parseLine("2024-01-15T10:30:00.123Z conn=9 op=1 RESULT");
+    CHECK(!l.thread_id.has_value());
+    for (const auto& t : l.tokens) {
+        CHECK(t.type != TokenType::THREAD_ID);
+    }
+}
+
 TEST(format_syslog_utc) {
     // Syslog has no year; the decoder uses the current year (decrementing
     // if the month is in the future).  find() is used because the rfc3339
@@ -213,4 +244,15 @@ TEST(format_does_not_touch_plain_lines) {
     p.setLogFormat(LogFormat::DEBUG);
     LogLine l = p.parseLine("conn=1 op=0 RESULT");
     CHECK_EQ(l.raw, "conn=1 op=0 RESULT");
+}
+
+TEST(format_auto_detects_syslog_too) {
+    // AUTO must convert both hex-epoch and syslog prefixes so that a
+    // mixed-format file (e.g. slapd logging changed format mid-file)
+    // renders uniformly as rfc3339.
+    LogParser p;
+    p.setLogFormat(LogFormat::AUTO);
+    LogLine l = p.parseLine("Aug  7 05:19:02 host slapd[3827]: conn=4");
+    CHECK(l.raw.find("T05:19:02.000000000Z") != std::string::npos);
+    CHECK_EQ(l.raw.substr(l.raw.find(' ') + 1), "host slapd[3827]: conn=4");
 }

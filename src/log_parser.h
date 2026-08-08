@@ -29,7 +29,7 @@
 // Input log format for the raw slapd line, matching OpenLDAP's
 // `olcLogFileFormat` (see servers/slapd/logging.c).
 //
-//   AUTO:         per-line detection (default, no-op on rfc3339 lines)
+//   AUTO:         per-line detection (default: hex-epoch and syslog, no-op on rfc3339)
 //   DEBUG:        "<hex.tv_sec>.<hex.frac> <thread-id> " decoded to rfc3339-utc
 //   SYSLOG_UTC:   "%b %d %H:%M:%S" decoded to rfc3339-utc (treated as UTC)
 //   SYSLOG_LOCAL: "%b %d %H:%M:%S" decoded to rfc3339-utc (treated as local)
@@ -44,6 +44,7 @@ enum class LogFormat {
 
 enum class TokenType {
     TIMESTAMP,
+    THREAD_ID,
     HOSTNAME,
     PROCESS,
     CONN_ID,
@@ -82,6 +83,7 @@ struct LogLine {
     std::optional<std::string> filter;
     std::optional<std::string> base;
     std::optional<std::string> error_code;
+    std::optional<std::string> thread_id;
 };
 
 class LogParser {
@@ -98,6 +100,7 @@ private:
     Token createToken(TokenType type, const std::string& value, size_t start, size_t end);
     std::string convertTimestamps(const std::string& line) const;
     bool looksLikeDebugHex(const std::string& line) const;
+    bool looksLikeSyslog(const std::string& line) const;
     std::string convertDebugHex(const std::string& line) const;
     std::string convertSyslog(const std::string& line, bool local) const;
     LogFormat format_ = LogFormat::AUTO;

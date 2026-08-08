@@ -28,6 +28,7 @@ std::string Filter::toString() const {
         case FilterType::OP: return "op=" + value;
         case FilterType::BASE: return "base=" + value;
         case FilterType::ERROR_CODE: return "err=" + value;
+        case FilterType::THREAD: return "thread=" + value;
         case FilterType::TEXT: return "text:" + value;
     }
     return value;
@@ -45,6 +46,8 @@ bool Filter::matches(const LogLine& line) const {
             return line.base.has_value() && line.base.value() == value;
         case FilterType::ERROR_CODE:
             return line.error_code.has_value() && line.error_code.value() == value;
+        case FilterType::THREAD:
+            return line.thread_id.has_value() && line.thread_id.value() == value;
         case FilterType::TEXT:
             return line.raw.find(value) != std::string::npos;
     }

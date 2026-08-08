@@ -682,7 +682,7 @@ inline const std::string DOCUMENTATION_TEXT = R"DOC(# slaptrack — OpenLDAP Log
 
 **SPDX-License-Identifier:** AGPL-3.0-or-later
 **License:** GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
-**Version:** 1.3.0
+**Version:** 1.3.1
 **Author:** Manuel FLURY
 **Copyright:** (c) 2026 Manuel FLURY. All rights reserved.
 
@@ -709,8 +709,8 @@ live follow mode, compressed log support, and 8 switchable colour schemas.
 ## Features
 
 - **ncurses TUI** with a 3-window layout (main content, filter bar, status bar)
-- **Colourised log display** with per-token colouring (timestamp, conn=, op=, dn=, etc.)
-- **Interactive filtering** by connection ID (conn=N), DN, operation ID, error code, base, or arbitrary text
+- **Colourised log display** with per-token colouring (timestamp, thread-ID, conn=, op=, dn=, etc.)
+- **Interactive filtering** by connection ID (conn=N), thread ID, DN, operation ID, error code, base, or arbitrary text
 - **Connection-range optimisation** for conn= filters: uses byte-offset index to scan only the relevant range
 - **Live follow mode** (`-f`): streams new log lines as they arrive, with log-rotation recovery via inotify
 - **Compressed log support**: automatic detection and decompression of gzip, bzip2, and xz files
@@ -794,8 +794,8 @@ slaptrack --log-format syslog-utc /var/log/slapd/access.log
 tail -f /var/log/slapd/access.log | slaptrack --log-format auto -
 ```
 
-`auto` (the default) detects the debug hex prefix per line while leaving
-everything else untouched.
+`auto` (the default) detects the debug hex prefix *and* syslog timestamps
+per line (syslog is decoded as UTC) while leaving everything else untouched.
 
 ### Compressed logs
 
@@ -859,6 +859,7 @@ slaptrack --licence
 
 Token types that can be filtered:
 - **conn=N** — filters all lines belonging to a specific connection (byte-range optimised)
+- **thread=0x...** — filters by the slapd thread ID (in debug-format logs: `<sec>.<frac> <thread-id>`)
 - **op=N** — filters by operation ID
 - **dn="..."** — filters by distinguished name
 - **err=N** — filters by LDAP error code
@@ -982,6 +983,7 @@ In pipe mode:
 | Token | Default colour | Bold |
 |-------|---------------|------|
 | Timestamp | Cyan | No |
+| thread-ID | Magenta | Yes |
 | conn= | Yellow | Yes |
 | op= | Magenta | Yes |
 | dn="..." | Green | Yes |

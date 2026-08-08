@@ -6,7 +6,7 @@ An interactive terminal-based log viewer for OpenLDAP (slapd) logs with coloriza
 
 - **Colorized display** - Different log components are color-coded for easy reading
 - **Compressed logs** - Transparent support for `.gz`, `.bz2`, `.xz` (auto-detected by magic bytes)
-- **Interactive filtering** - Click on connection IDs, DNs, or other tokens to filter
+- **Interactive filtering** - Click on connection IDs, thread IDs, DNs, or other tokens to filter
 - **Filter chaining** - Apply multiple filters in sequence (e.g., filter by conn, then by dn)
 - **Token-aware navigation** - Cursor highlights entire token, press `/` to search for current token
 - **Follow mode** - Real-time monitoring like `tail -f` with automatic scroll
@@ -34,7 +34,7 @@ make clean && make
 
 - `-f` - Follow mode (like `tail -f`), automatically shows new lines as they're written
 - `--log-format <fmt>` - Input log format: `auto`, `debug`, `syslog-utc`, `syslog-local`, `rfc3339` (default: `auto`)
-  - `auto` - Per-line detection: decodes the debug hex epoch prefix, leaves everything else untouched
+  - `auto` - Per-line detection: decodes the debug hex epoch prefix **and** syslog timestamps (as UTC), leaves the rest untouched
   - `debug` - OpenLDAP debug/access log: `<sec>.<frac> <thread-id> ...` (hex epoch) decoded to RFC3339 UTC
   - `syslog-utc` - `%b %d %H:%M:%S` syslog timestamps decoded as UTC
   - `syslog-local` - same, but decoded as local time
@@ -101,6 +101,7 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 | Cyan | Timestamp |
 | Orange | Connection ID (conn=) |
 | Purple | Operation ID (op=) |
+| Magenta | Thread ID (0x...) |
 | Green | Distinguished Name (dn=) |
 | Yellow | Filter expression |
 | Blue | IP Address |
@@ -119,6 +120,12 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 1. Navigate to a line with `conn=12345`
 2. Move cursor onto the connection ID token
 3. Press `Enter` to filter - now only showing that connection
+4. Press `Esc` or `Backspace` to remove the filter
+
+### Filtering by Thread
+1. Navigate to a line with a thread ID token (`0x...`, magenta, at the start of debug-format lines)
+2. Move cursor onto the thread ID token
+3. Press `Enter` to filter - now only showing lines from that slapd thread
 4. Press `Esc` or `Backspace` to remove the filter
 
 ### Chained Filtering

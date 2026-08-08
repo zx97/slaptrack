@@ -32,6 +32,7 @@ enum class FilterType {
     OP,
     BASE,
     ERROR_CODE,
+    THREAD,
     TEXT
 };
 
@@ -54,6 +55,9 @@ struct Filter {
     // filters (matches() uses raw find on the line).
     bool candidateInRaw(const std::string& rawLine) const {
         if (type == FilterType::TEXT) return true;
+        // THREAD ids appear bare (`0x7f…`), not as `key=value`, so the
+        // cheap test is a plain substring search.
+        if (type == FilterType::THREAD) return rawLine.find(value) != std::string::npos;
         // Try the unquoted shape first (op=0, err=0, conn=700635…)
         // then the quoted shape (base="ou=…", dn="…", filter="…").
         // We can't know which shape the calling site stripped, so

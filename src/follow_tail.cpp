@@ -49,6 +49,7 @@ const char* ansiForToken(TokenType t, int schema) {
 
     struct { TokenType type; const char* code; } static const TABLE[] = {
         {TokenType::TIMESTAMP,    "\x1b[36m"},
+        {TokenType::THREAD_ID,    "\x1b[35m"},
         {TokenType::CONN_ID,      "\x1b[33m"},
         {TokenType::OP_ID,        "\x1b[35m"},
         {TokenType::DN_VALUE,     "\x1b[32m"},
@@ -81,6 +82,7 @@ bool isBoldToken(TokenType t, int schema) {
         switch (t) {
             case TokenType::CONN_ID:
             case TokenType::OP_ID:
+            case TokenType::THREAD_ID:
             case TokenType::DN_VALUE:
             case TokenType::ERROR_CODE:
             case TokenType::KEYWORD:
@@ -94,6 +96,7 @@ bool isBoldToken(TokenType t, int schema) {
     switch (t) {
         case TokenType::CONN_ID:
         case TokenType::OP_ID:
+        case TokenType::THREAD_ID:
         case TokenType::DN_VALUE:
         case TokenType::ERROR_CODE:
         case TokenType::KEYWORD:
