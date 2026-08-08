@@ -395,13 +395,13 @@ void Viewer::recalculateScreenRows() {
     }
     
     for (size_t i = 0; i < visibleIndices_.size(); i++) {
-        const std::string& raw = buffer_.getRawLine(visibleIndices_[i]);
-        if (raw.empty()) {
+        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (!raw) {
             lineScreenRows_.push_back(1);
             continue;
         }
         
-        int len = (int)buffer_.getParser().renderedLength(raw);
+        int len = (int)buffer_.getParser().renderedLength(*raw);
         int rows = (len + contentWidth - 1) / contentWidth;
         if (rows < 1) rows = 1;
         lineScreenRows_.push_back(rows);
@@ -461,11 +461,11 @@ bool Viewer::computeWrappedScreenRowsWithProgress() {
     for (size_t i = 0; i < rangeSize; i++) {
         if (g_interrupted) { cancelled = true; break; }
         
-        const std::string& raw = buffer_.getRawLine(visibleIndices_[i]);
-        if (raw.empty()) {
+        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (!raw) {
             lineScreenRows_.push_back(1);
         } else {
-            int len = (int)buffer_.getParser().renderedLength(raw);
+            int len = (int)buffer_.getParser().renderedLength(*raw);
             int rows = (len + contentWidth - 1) / contentWidth;
             if (rows < 1) rows = 1;
             lineScreenRows_.push_back(rows);
@@ -1675,12 +1675,30 @@ void Viewer::goToBottom() {
 bool Viewer::linePassesFilters(size_t lineIndex) {
     if (filterStack_.empty()) return true;
 
-    const std::string& raw = buffer_.getRawLine(lineIndex);
-    if (raw.empty()) return false;
-    if (!filterStack_.candidateInRaw(raw)) return false;
+    std::optional<std::string> raw = buffer_.getRawLine(lineIndex);
+    if (!raw) return false;
+    if (!filterStack_.candidateInRaw(*raw)) return false;
 
-    LogLine line = buffer_.getParser().parseLine(raw);
+    LogLine line = buffer_.getParser().parseLine(*raw);
     return filterStack_.matches(line, lineIndex);
+}
+
+std::vector<size_t> Viewer::scanLines(size_t scanStart, size_t scanEnd, bool& cancelled) {
+    std::vector<size_t> result;
+    result.reserve(scanEnd >= scanStart ? scanEnd - scanStart + 1 : 0);
+    LogParser& parser = buffer_.getParser();
+    cancelled = false;
+    for (size_t i = scanStart; i <= scanEnd; i++) {
+        if (g_interrupted) { cancelled = true; break; }
+        std::optional<std::string> raw = buffer_.getRawLine(i);
+        if (!raw) continue;
+        if (!filterStack_.candidateInRaw(*raw)) continue;
+        LogLine line = parser.parseLine(*raw);
+        if (filterStack_.matches(line, i)) {
+            result.push_back(i);
+        }
+    }
+    return result;
 }
 
 size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {
@@ -1777,59 +1795,11 @@ void Viewer::buildFilteredIndices() {
     newVisibleIndices.reserve(rangeSize);
 
     // Switch to non-blocking input so we can poll for cancellation
-    // keys without slowing the filter loop with 10ms timeouts.
+    // keys without slowing the scan with 10ms timeouts.
     nodelay(stdscr, TRUE);
 
-    size_t lastProgressLine = scanStart;
     bool cancelled = false;
-
-    LogParser& parser = buffer_.getParser();
-    for (size_t i = scanStart; i <= scanEnd; i++) {
-        if (g_interrupted) { cancelled = true; break; }
-
-        // Fast path: O(1) access to the raw line text.  Use the
-        // cheap "candidate" check (substring search) to skip the
-        // regex parse for any line whose raw text cannot possibly
-        // contain the filter value.  On a 300K-line log with a base=
-        // filter this skips 99% of parses.
-        const std::string& raw = buffer_.getRawLine(i);
-        if (raw.empty()) continue;
-        if (!filterStack_.candidateInRaw(raw)) continue;
-        LogLine line = parser.parseLine(raw);
-        if (filterStack_.matches(line, i)) {
-            newVisibleIndices.push_back(i);
-        }
-
-        // Periodically poll for a cancellation key and refresh the
-        // progress bar.  Every 100 lines keeps the popup responsive
-        // without making the inner loop measurably slower.
-        if (i - lastProgressLine >= 100) {
-            lastProgressLine = i;
-
-            if (g_interrupted) { cancelled = true; break; }
-
-            int ch = getch();
-            if (ch != ERR) {
-                if (ch == 27 /* Esc */ ||
-                    ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
-                    ch == 'q' || ch == 'Q' ||
-                    ch == 3 /* Ctrl+C */ || ch == 28 /* Ctrl+\ */) {
-                    cancelled = true;
-                    g_interrupted = 1;
-                } else {
-                    ungetch(ch);
-                }
-            }
-
-            if (cancelled) break;
-
-            if (rangeSize > 0) {
-                float progress = (float)(i - scanStart + 1) / (float)rangeSize;
-                if (progress > 1.0f) progress = 1.0f;
-                showPopup("Filtering... (Esc to cancel)", progress);
-            }
-        }
-    }
+    newVisibleIndices = scanLines(scanStart, scanEnd, cancelled);
 
     // Restore blocking input mode for the main loop.
     nodelay(stdscr, FALSE);

@@ -108,18 +108,17 @@ size_t LogBuffer::getTotalLines() const {
     return index_.getTotalLines();
 }
 
-const std::string& LogBuffer::getRawLine(size_t index) const {
-    static const std::string empty;
+std::optional<std::string> LogBuffer::getRawLine(size_t index) const {
     const size_t total = index_.getTotalLines();
     if (index >= total) {
-        return empty;
+        return std::nullopt;
     }
     if (index < rawPageStart_ || index >= rawPageStart_ + rawLines_.size()) {
         loadRawWindow(index);
     }
     const size_t offset = index - rawPageStart_;
     if (offset >= rawLines_.size()) {
-        return empty;
+        return std::nullopt;
     }
     return rawLines_[offset];
 }
@@ -134,12 +133,12 @@ std::optional<LogLine> LogBuffer::getLine(size_t index) {
         return it->second;
     }
     
-    const std::string& rawLine = getRawLine(index);
-    if (rawLine.empty()) {
+    std::optional<std::string> rawLine = getRawLine(index);
+    if (!rawLine) {
         return std::nullopt;
     }
     
-    LogLine parsed = parser_.parseLine(rawLine);
+    LogLine parsed = parser_.parseLine(*rawLine);
     cache_[index] = parsed;
     
     if (cache_.size() > windowSize_ * 2) {

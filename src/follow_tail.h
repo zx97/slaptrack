@@ -66,7 +66,13 @@ public:
     void run();
 
 private:
-    bool terminalRaw_;
+    void detectColorSupport();
+    bool setupTerminal();
+    void restoreTerminal() const;
+    void setupSignals();
+    void drainStdin();
+
+    bool terminalRaw_ = false;
     int schema_;
     LogFormat logFormat_ = LogFormat::AUTO;
 };

@@ -85,6 +85,7 @@ private:
     
     void buildFilteredIndices();
     bool linePassesFilters(size_t lineIndex);
+    std::vector<size_t> scanLines(size_t scanStart, size_t scanEnd, bool& cancelled);
     size_t findConnectionStart(size_t fromLine, const std::string& connId);
     size_t findConnectionEnd(size_t fromLine, const std::string& connId);
     

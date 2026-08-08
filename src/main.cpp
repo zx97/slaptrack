@@ -23,13 +23,12 @@
 #include "follow_tail.h"
 #include "compressed_io.h"
 #include "embedded.hpp"
+#include "version.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <unistd.h>
-
-#define SLAPTRACK_VERSION "1.3.1"
 
 namespace {
 
@@ -63,10 +62,6 @@ bool parseLogFormat(const std::string& s, LogFormat& out) {
 #ifndef BUILD_NUMBER
 #define BUILD_NUMBER 0
 #endif
-
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
-#define SLAPTRACK_BUILD __DATE__ " " __TIME__ " build " TOSTRING(BUILD_NUMBER)
 
 void printUsage(const char* program) {
     std::cerr << program << " - an OpenLDAP Log Viewer v" << SLAPTRACK_VERSION << "\n";

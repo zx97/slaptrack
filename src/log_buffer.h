@@ -43,9 +43,9 @@ public:
     // Access to the raw line text.  Only a bounded window of lines is
     // kept in memory (rawWindowSize_); requesting a line outside that
     // window reloads a fresh page from disk in one grouped read.  Used
-    // by the filter loop and the wrap-layout scan.  Returns an empty
-    // string if the index is out of range.
-    const std::string& getRawLine(size_t index) const;
+    // by the filter loop and the wrap-layout scan.  Returns std::nullopt
+    // if the index is out of range.
+    std::optional<std::string> getRawLine(size_t index) const;
     
     // Expose the parser so the filter loop can parse raw lines
     // without going through the (LRU-bounded) parsed-line cache.
