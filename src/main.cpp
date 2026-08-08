@@ -92,7 +92,7 @@ void printUsage(const char* program) {
     std::cerr << "  /                    Search (pre-filled with token)\n";
     std::cerr << "  n/N                  Next/Previous search result\n";
     std::cerr << "  #                    Toggle line numbers\n";
-    std::cerr << "  W                    Toggle line wrapping\n";
+    std::cerr << "  ←/→ or h/l          Scroll long lines horizontally\n";
     std::cerr << "  F1-F8               Switch color schema (viewer mode only)\n";
     std::cerr << "  Mouse scroll         Scroll up/down\n";
     std::cerr << "  Mouse click          Move cursor\n";

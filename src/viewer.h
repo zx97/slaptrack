@@ -157,6 +157,11 @@ private:
     std::vector<int> lineScreenRows_;
 
     // ---- Background wrap-row computation ----
+    // DISABLED: wrap mode was replaced by horizontal scroll (toggleHorizontalScroll).
+    // The members and worker thread machinery below are kept around in case we
+    // want to bring wrap back; startWrapCompute() is now a no-op so no thread
+    // is ever spawned.  See viewer.cpp for the disabled-but-preserved code.
+    //
     // Worker is spawned by startWrapCompute() and runs to completion.
     // The main thread never joins it at runtime (would block the UI on
     // disk reads); stopWrapWorker() only sets wrapStopRequested_ and the
@@ -168,6 +173,13 @@ private:
     std::vector<size_t> wrapSnapshot_;
     bool wrapDone_ = true;
     int wrapPopupPct_ = -1;
+
+    // ---- Horizontal scroll (replaces wrap mode) ----
+    // Always-on: the cursor keys (Left/Right and h/l) move the cursor
+    // within the line; if the cursor would go off-screen, the line
+    // content shifts so the cursor stays visible.  horizontalOffset_
+    // is how many columns the line content is scrolled to the right.
+    int horizontalOffset_ = 0;
     
     int hoverRow_;
     int hoverCol_;

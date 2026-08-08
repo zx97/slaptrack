@@ -386,104 +386,12 @@ void Viewer::fullRedraw(bool recomputeRows) {
 }
 
 void Viewer::recalculateScreenRows() {
-    // Wrap-mode OFF: synchronous, fast (1 row per line) and the worker
-    // has nothing to do — make sure it is stopped before we touch the
-    // cache directly.
-    if (!wrapLines_) {
-        stopWrapWorker();
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        lineScreenRows_.clear();
-        lineScreenRows_.resize(visibleIndices_.size(), 1);
-        wrapWidth_ = 0;
-        wrapDone_ = true;
-        return;
-    }
-
-    if (visibleIndices_.empty()) {
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        lineScreenRows_.clear();
-        wrapDone_ = true;
-        return;
-    }
-
-    const int contentWidth = getContentWidthForWrap();
-
-    // Fast path: cache is in sync with current visible-row content and
-    // the same content width — do nothing.  This is what lets
-    // scroll/pageUp/pageDown NOT restart the worker.
-    {
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        const bool upToDate = wrapDone_
-                           && (wrapWidth_ == contentWidth)
-                           && (wrapSnapshot_.size() == visibleIndices_.size());
-        if (upToDate) {
-            return;
-        }
-    }
-
-    // Small logs: compute synchronously.  The cost is bounded and avoids
-    // spawning a thread for a job that finishes in a millisecond.
-    static constexpr size_t kWrapSyncThreshold = 4096;
-    if (visibleIndices_.size() <= kWrapSyncThreshold) {
-        stopWrapWorker();
-        std::vector<int> rows;
-        rows.reserve(visibleIndices_.size());
-        computeWrapRowsSync(0, visibleIndices_.size(), contentWidth, rows);
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        lineScreenRows_.swap(rows);
-        wrapWidth_ = contentWidth;
-        wrapSnapshot_ = visibleIndices_;
-        wrapDone_ = true;
-        wrapPopupPct_ = -1;
-        return;
-    }
-
-    // Big logs: hand off to the background worker.
-    startWrapCompute(contentWidth);
 }
 
 void Viewer::toggleWrap() {
-    wrapLines_ = !wrapLines_;
-
-    if (wrapLines_) {
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        lineScreenRows_.clear();
-    } else {
-        stopWrapWorker();
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        lineScreenRows_.clear();
-        lineScreenRows_.resize(visibleIndices_.size(), 1);
-        wrapWidth_ = 0;
-        wrapDone_ = true;
-    }
-    // re-evaluate row cache: small logs compute synchronously, large
-    // ones spawn the background worker which fills the cache as the
-    // user continues navigating.
-    if (wrapLines_) {
-        recalculateScreenRows();
-    }
-    fullRedraw(false);
 }
 
 void Viewer::ensureScreenRowsCachedUpTo(size_t) {
-    // The actual row computation now runs on the background worker
-    // started by recalculateScreenRows().  drawContent() and redrawLine()
-    // call this as a "is the cache good enough?" probe; if it is, the
-    // pump hides the popup.  Only the rare case where the worker is
-    // idle but the cache is short requires a kick here.
-    if (!wrapLines_) return;
-    if (visibleIndices_.empty()) return;
-
-    {
-        std::lock_guard<std::mutex> lk(wrapMutex_);
-        const size_t total = visibleIndices_.size();
-        const size_t targetIdx = std::min<size_t>(
-            (size_t)scrollOffset_ + (size_t)(termHeight_ - 2), total);
-        if (lineScreenRows_.size() >= targetIdx) return;
-        if (!wrapDone_) return;
-    }
-
-    recalculateScreenRows();
 }
 
 int Viewer::getContentWidthForWrap() const {
@@ -521,9 +429,7 @@ int Viewer::wrapRowAt(size_t i) const {
 }
 
 void Viewer::startWrapCompute(int contentWidth) {
-    // One worker thread per job.  If a previous job is still running
-    // (user toggled W again before the first compute finished), join
-    // it first so we don't have two threads appending to lineScreenRows_.
+#if 0
     if (wrapWorker_.joinable()) {
         wrapStopRequested_.store(true);
         wrapWorker_.detach();
@@ -545,13 +451,18 @@ void Viewer::startWrapCompute(int contentWidth) {
     }
     wrapPopupPct_ = -1;
     wrapWorker_ = std::thread(&Viewer::wrapRunOneJob, this);
+#endif
+    (void)contentWidth;
 }
 
 void Viewer::stopWrapWorker() {
+#if 0
     wrapStopRequested_.store(true);
+#endif
 }
 
 void Viewer::wrapRunOneJob() {
+#if 0
     static constexpr size_t kBatch = 256;
     static constexpr auto kYield = std::chrono::milliseconds(1);
 
@@ -609,7 +520,6 @@ void Viewer::wrapRunOneJob() {
 
         {
             std::lock_guard<std::mutex> lk(wrapMutex_);
-            // Mark the job done only if no newer job has replaced it.
             if (wrapWidth_ == width && wrapSnapshot_ == snapshot) {
                 wrapDone_ = true;
             }
@@ -621,9 +531,11 @@ void Viewer::wrapRunOneJob() {
         std::fprintf(stderr,
                      "slaptrack: wrap worker terminated: unknown\n");
     }
+#endif
 }
 
 void Viewer::pumpWrapProgress() {
+#if 0
     if (!wrapLines_) return;
 
     size_t have = 0;
@@ -642,10 +554,6 @@ void Viewer::pumpWrapProgress() {
     const size_t needed = std::min<size_t>(
         (size_t)scrollOffset_ + (size_t)(termHeight_ - 2), total);
 
-    // If the worker died (no thread running, not done, cache incomplete)
-    // recover by kicking a fresh compute, but rate-limit to once per
-    // second — otherwise a worker that dies immediately for any reason
-    // would cause the pump to spin at 100% CPU and freeze the UI.
     if (!done && !workerAlive && have < needed) {
         const auto now = std::chrono::steady_clock::now();
         if (lastPumpRecovery_.time_since_epoch().count() == 0
@@ -677,51 +585,20 @@ void Viewer::pumpWrapProgress() {
     } else {
         showPopup(msg, pct / 100.0f);
     }
+#endif
 }
 
 int Viewer::calculateLineScreenRows(const LogLine& line) {
-    if (!wrapLines_) return 1;
-    
-    int contentWidth = termWidth_;
-    if (showLineNumbers_) {
-        size_t totalLines = buffer_.getTotalLines();
-        int numWidth = std::to_string(totalLines).length() + 2;
-        contentWidth -= numWidth;
-    }
-    
-    int len = line.raw.length();
-    int rows = (len + contentWidth - 1) / contentWidth;
-    return rows < 1 ? 1 : rows;
+    (void)line;
+    return 1;
 }
 
 int Viewer::getScreenRowForCursorRow(int cursorRow) {
-    if (!wrapLines_) return cursorRow - scrollOffset_;
-
-    // Reads of lineScreenRows_ must be locked: the worker appends to
-    // the vector concurrently.  Locking around the whole sum keeps
-    // the prefix consistent.  The lock is uncontended on the UI thread
-    // (worker only holds it briefly between batches).
-    std::lock_guard<std::mutex> lk(wrapMutex_);
-    int screenRow = 0;
-    const int end = std::min<int>(cursorRow, (int)lineScreenRows_.size());
-    for (int i = scrollOffset_; i < end; i++) {
-        screenRow += lineScreenRows_[i];
-    }
-    return screenRow;
+    return cursorRow - scrollOffset_;
 }
 
 int Viewer::getCursorRowForScreenRow(int screenRow) {
-    if (!wrapLines_) return screenRow + scrollOffset_;
-
-    std::lock_guard<std::mutex> lk(wrapMutex_);
-    int currentScreenRow = 0;
-    for (size_t i = scrollOffset_; i < lineScreenRows_.size(); i++) {
-        currentScreenRow += lineScreenRows_[i];
-        if (currentScreenRow > screenRow) {
-            return (int)i;
-        }
-    }
-    return (int)visibleIndices_.size() - 1;
+    return screenRow + scrollOffset_;
 }
 
 void Viewer::drawContent() {
@@ -731,10 +608,6 @@ void Viewer::drawContent() {
     int currentScreenRow = 0;
 
     for (int i = scrollOffset_; i < (int)visibleIndices_.size() && currentScreenRow < contentHeight; i++) {
-        if (wrapLines_) {
-            ensureScreenRowsCachedUpTo(scrollOffset_ + contentHeight);
-        }
-
         auto line = buffer_.getLine(visibleIndices_[i]);
         if (!line) {
             currentScreenRow++;
@@ -743,39 +616,22 @@ void Viewer::drawContent() {
 
         bool isHighlighted = (i == cursorRow_);
         drawLine(currentScreenRow, *line, visibleIndices_[i], isHighlighted);
-
-        if (wrapLines_) {
-            int rows = wrapRowAt(i);
-            currentScreenRow += rows;
-        } else {
-            currentScreenRow++;
-        }
+        currentScreenRow++;
     }
 }
 
 void Viewer::drawLine(int startRow, const LogLine& line, size_t lineNum, bool isHighlighted) {
-    if (wrapLines_) {
-        printWrappedLine(line, lineNum, startRow, isHighlighted);
-    } else {
-        printTruncatedLine(line, lineNum, startRow, isHighlighted);
-    }
+    printTruncatedLine(line, lineNum, startRow, isHighlighted);
 }
 
 void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bool isHighlighted) {
     wmove(mainWindow_, row, 0);
     wclrtoeol(mainWindow_);
-    
-    // Plain text between tokens must be rendered in the theme's base
-    // colour (pair 16), not in whatever color the previous line's last
-    // token left active on the window.  Without this reset a syslog
-    // prefix ("Aug 06 05:19:02 host slapd[pid]:") inherits e.g. the bold
-    // blue of a keyword from the line above, making the palette look
-    // random; and light themes (Solarized Light, High Contrast) would
-    // lose their white background outside the tokens.
+
     wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
-    
+
     int col = 0;
-    
+
     if (showLineNumbers_) {
         size_t totalLines = buffer_.getTotalLines();
         int numWidth = std::to_string(totalLines).length();
@@ -784,53 +640,88 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
             numStr = " " + numStr;
         }
         numStr += " ";
-        
+
         wattron(mainWindow_, COLOR_PAIR(15));
         mvwprintw(mainWindow_, row, 0, "%s", numStr.c_str());
         wattroff(mainWindow_, COLOR_PAIR(15));
         col = numWidth + 1;
     }
-    
-    size_t lastEnd = 0;
+
+    int visibleWidth = termWidth_ - col;
+    int adjStart = horizontalOffset_;
+    int adjEnd = horizontalOffset_ + visibleWidth;
+    size_t lastEnd = (size_t)adjStart;
+
     for (size_t i = 0; i < line.tokens.size() && col < termWidth_; i++) {
         const auto& token = line.tokens[i];
-        
-        if (token.start_pos > lastEnd && col < termWidth_) {
-            std::string plainText = line.raw.substr(lastEnd, token.start_pos - lastEnd);
-            if (col + (int)plainText.length() > termWidth_) {
-                plainText = plainText.substr(0, termWidth_ - col);
+
+        if ((int)token.end_pos <= adjStart) continue;
+        if ((int)token.start_pos >= adjEnd) break;
+
+        int tStart = std::max((int)token.start_pos, adjStart);
+        int tEnd = std::min((int)token.end_pos, adjEnd);
+
+        if ((size_t)tStart > lastEnd) {
+            int plainStart = (int)lastEnd;
+            int plainEnd = std::min(tStart, adjEnd);
+            if (plainEnd > plainStart) {
+                int offsetInLine = plainStart;
+                int len = plainEnd - plainStart;
+                int screenCol = col + (offsetInLine - adjStart);
+                if (screenCol >= termWidth_) break;
+                if (screenCol + len > termWidth_) {
+                    len = termWidth_ - screenCol;
+                }
+                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                mvwprintw(mainWindow_, row, screenCol, "%s",
+                          line.raw.substr(offsetInLine, len).c_str());
             }
-            wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
-            mvwprintw(mainWindow_, row, col, "%s", plainText.c_str());
-            col += plainText.length();
         }
-        
-        if (col < termWidth_) {
-            bool isCurrentToken = isHighlighted && (i == currentTokenIndex_);
-            bool isHovered = (row == hoverRow_ && col <= hoverCol_ && hoverCol_ < col + (int)token.value.length());
-            printToken(token, isCurrentToken, isHovered);
-            std::string val = token.value;
-            if (col + (int)val.length() > termWidth_) {
-                val = val.substr(0, termWidth_ - col);
+
+        int screenCol = col + (tStart - adjStart);
+        if (screenCol < termWidth_) {
+            int len = tEnd - tStart;
+            if (screenCol + len > termWidth_) {
+                len = termWidth_ - screenCol;
             }
-            mvwprintw(mainWindow_, row, col, "%s", val.c_str());
-            col += token.value.length();
+            int tokIdx = (int)i;
+            bool isCurrent = isHighlighted
+                && (size_t)tokIdx == currentTokenIndex_
+                && (size_t)(adjStart + (screenCol - col)) >= token.start_pos;
+            bool isHovered = (row == hoverRow_
+                && screenCol <= hoverCol_
+                && hoverCol_ < screenCol + (int)token.value.length());
+            Token shifted;
+            shifted.type = token.type;
+            shifted.value = line.raw.substr(tStart, len);
+            shifted.start_pos = tStart;
+            shifted.end_pos = tStart + len;
+            printToken(shifted, isCurrent, isHovered);
+            mvwprintw(mainWindow_, row, screenCol, "%s", shifted.value.c_str());
         }
-        
-        lastEnd = token.end_pos;
+
+        lastEnd = (size_t)tEnd;
     }
-    
-    if (lastEnd < line.raw.length() && col < termWidth_) {
-        std::string remaining = line.raw.substr(lastEnd, termWidth_ - col);
-        wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
-        mvwprintw(mainWindow_, row, col, "%s", remaining.c_str());
-        col += remaining.length();
+
+    if ((int)lastEnd < adjEnd && (int)line.raw.length() > (int)lastEnd) {
+        int screenCol = col + ((int)lastEnd - adjStart);
+        if (screenCol < termWidth_) {
+            int len = std::min(adjEnd, (int)line.raw.length()) - (int)lastEnd;
+            if (screenCol + len > termWidth_) {
+                len = termWidth_ - screenCol;
+            }
+            if (len > 0) {
+                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                mvwprintw(mainWindow_, row, screenCol, "%s",
+                          line.raw.substr(lastEnd, len).c_str());
+            }
+        }
     }
-    
+
     if (isHighlighted) {
-        while (col < termWidth_) {
-            mvwaddch(mainWindow_, row, col, ' ');
-            col++;
+        int screenCol = col + (adjEnd - adjStart);
+        for (int c = screenCol; c < termWidth_; c++) {
+            mvwaddch(mainWindow_, row, c, ' ');
         }
         wattroff(mainWindow_, A_REVERSE);
     }
@@ -1067,7 +958,7 @@ void Viewer::drawStatusBar() {
         }
     }
     
-    std::string help = "[F1-8] [Enter]Filter [Esc]Back [/]Search [#]Num [W]rap [q]Quit ";
+    std::string help = "[F1-8] [Enter]Filter [Esc]Back [/]Search [#]Num [h/l]Scroll [q]Quit ";
     
     int padding = termWidth_ - status.length() - help.length();
     if (padding < 0) padding = 0;
@@ -1195,40 +1086,46 @@ void Viewer::handleInput() {
         case 'h':
             if (cursorCol_ > 0) {
                 cursorCol_--;
-                auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_);
-                if (tokenIdx.has_value()) {
-                    currentTokenIndex_ = tokenIdx.value();
-                }
-                // Redraw the current line so the token underline
-                // follows the cursor within the line.
+            } else if (horizontalOffset_ > 0) {
+                horizontalOffset_--;
                 redrawLine(cursorRow_, true);
-                int screenRow = getScreenRowForCursorRow(cursorRow_);
-                wmove(mainWindow_, screenRow, cursorCol_);
+                wmove(mainWindow_, getScreenRowForCursorRow(cursorRow_), cursorCol_);
                 wnoutrefresh(mainWindow_);
                 doupdate();
             } else if (!filterStack_.empty()) {
                 deactivateFilter();
+            }
+            if (cursorCol_ > 0 || (cursorCol_ == 0 && horizontalOffset_ == 0)) {
+                auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_ + horizontalOffset_);
+                if (tokenIdx.has_value()) {
+                    currentTokenIndex_ = tokenIdx.value();
+                }
+                redrawLine(cursorRow_, true);
+                wmove(mainWindow_, getScreenRowForCursorRow(cursorRow_), cursorCol_);
+                wnoutrefresh(mainWindow_);
+                doupdate();
             }
             break;
         case KEY_RIGHT:
         case 'l':
             if (cursorCol_ < termWidth_ - 1) {
                 cursorCol_++;
-                auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_);
+            } else {
+                horizontalOffset_++;
+                redrawLine(cursorRow_, true);
+                wmove(mainWindow_, getScreenRowForCursorRow(cursorRow_), cursorCol_);
+                wnoutrefresh(mainWindow_);
+                doupdate();
+            }
+            {
+                auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_ + horizontalOffset_);
                 if (tokenIdx.has_value()) {
                     currentTokenIndex_ = tokenIdx.value();
                 }
                 redrawLine(cursorRow_, true);
-                int screenRow = getScreenRowForCursorRow(cursorRow_);
-                wmove(mainWindow_, screenRow, cursorCol_);
+                wmove(mainWindow_, getScreenRowForCursorRow(cursorRow_), cursorCol_);
                 wnoutrefresh(mainWindow_);
                 doupdate();
-            } else {
-                // Right at end of line jumps to start of next line.
-                moveCursorDown();
-                cursorCol_ = 0;
-                currentTokenIndex_ = 0;
-                redrawLine(cursorRow_, true);
             }
             break;
         case KEY_PPAGE:
@@ -1282,7 +1179,6 @@ void Viewer::handleInput() {
             break;
         case 'W':
         case 'w':
-            toggleWrap();
             break;
         case KEY_F(1): case KEY_F(2): case KEY_F(3): case KEY_F(4):
         case KEY_F(5): case KEY_F(6): case KEY_F(7): case KEY_F(8): {

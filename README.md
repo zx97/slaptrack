@@ -11,7 +11,7 @@ An interactive terminal-based log viewer for OpenLDAP (slapd) logs with coloriza
 - **Token-aware navigation** - Cursor highlights entire token, press `/` to search for current token
 - **Follow mode** - Real-time monitoring like `tail -f` with automatic scroll
 - **Line numbers** - Toggle display with `#` key
-- **Line wrapping** - Toggle with `W` for long lines
+- **Horizontal scroll** - `←/→` (or `h/l`) scroll long lines that exceed the terminal width
 - **Mouse support** - Scroll wheel navigation, click to move cursor, double-click to filter
 - **Search** - Full-text search with next/previous navigation
 - **Vim-like navigation** - Supports hjkl, g/G, and other vim shortcuts
