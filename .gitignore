@@ -1,19 +1,22 @@
-# === Documentation ===
-*.md
-LICENSE
-.gitignore
-
 # === Build artifacts ===
 *.o
 *.d
+build/
 build_number.txt
 slaptrack
-build/
 
 # === Editor temporaries ===
 *~
 *.swp
 *.tmp
+
+# === Session transcripts & scratch ===
+session-*.md
+
+# === Tooling / agent artifacts (not source) ===
+.omo/
+.opencode/
+.codegraph/
 
 # === Local symlinks (do not track) ===
 logs
