@@ -30,7 +30,6 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
-#include <condition_variable>
 #include <ncurses.h>
 
 class Viewer {
@@ -65,7 +64,7 @@ private:
     // Background wrap-row computation (see viewer.cpp for design).
     void startWrapCompute(int contentWidth);
     void stopWrapWorker();
-    void wrapWorkerMain();
+    void wrapRunOneJob();
     void pumpWrapProgress();
     int getContentWidthForWrap() const;
     void computeWrapRowsSync(size_t start, size_t end, int contentWidth,
@@ -158,21 +157,20 @@ private:
     std::vector<int> lineScreenRows_;
 
     // ---- Background wrap-row computation ----
-    // The worker thread is spawned the first time wrap-mode is enabled
-    // on a log large enough to justify the overhead (kWrapSyncThreshold
-    // in viewer.cpp).  It lives until ~Viewer (or run()'s end) joins it.
+    // One worker thread per compute job.  startWrapCompute() spawns a
+    // new thread (joining the previous one if any); the thread runs
+    // wrapRunOneJob to completion, then exits.  The cache state is
+    // guarded by wrapMutex_:
+    //   wrapSnapshot_  — UI-owned copy of visibleIndices_ at job start
+    //   wrapWidth_     — content width captured at job start
+    //   wrapDone_      — true once the current snapshot has been fully
+    //                    computed (or the cache is empty)
     std::thread wrapWorker_;
-    mutable std::mutex wrapMutex_;        // guards lineScreenRows_ + worker state
-    std::condition_variable wrapCv_;      // wakes the worker on a new job
-    bool wrapWorkerStop_ = false;         // permanent exit requested
-    bool wrapJobPending_ = false;         // a compute job is queued
-    uint64_t wrapGen_ = 0;                // bumped on every invalidate
-    uint64_t wrapCompletedGen_ = 0;       // last generation fully computed
-    uint64_t wrapContentVersion_ = 0;     // bumped on visibleIndices_ content change
-    uint64_t wrapSnapshotVersion_ = 0;    // captured at start of current job
-    int wrapWidth_ = 0;                   // content width captured at job start
-    std::vector<size_t> wrapSnapshot_;    // visible indices snapshot (UI-owned copy)
-    int wrapPopupPct_ = -1;               // last progress percent drawn in the popup
+    mutable std::mutex wrapMutex_;
+    int wrapWidth_ = 0;
+    std::vector<size_t> wrapSnapshot_;
+    bool wrapDone_ = true;
+    int wrapPopupPct_ = -1;               // last progress percent drawn
     
     int hoverRow_;
     int hoverCol_;
