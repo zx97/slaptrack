@@ -22,8 +22,11 @@ SOURCES = $(wildcard $(SRC_DIR)/*.cpp)
 OBJECTS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SOURCES))
 
 BUILD_FILE = build_number.txt
+TEST_DIR = tests
+TEST_SOURCES = $(TEST_DIR)/test_main.cpp $(TEST_DIR)/test_log_parser.cpp $(TEST_DIR)/test_filter.cpp
+TEST_TARGET = $(BUILD_DIR)/slaptrack_tests
 
-.PHONY: all clean FORCE
+.PHONY: all clean test FORCE
 
 all: $(TARGET)
 
@@ -42,6 +45,14 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp $(BUILD_FILE) | $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -DBUILD_NUMBER=$$(cat $(BUILD_FILE)) -c $< -o $@
+
+# Unit tests: compile the parser/filter units (no ncurses needed) plus
+# the harness and run them.  No test framework dependency.
+$(TEST_TARGET): $(TEST_SOURCES) $(SRC_DIR)/log_parser.cpp $(SRC_DIR)/log_parser.h $(SRC_DIR)/filter.cpp $(SRC_DIR)/filter.h $(SRC_DIR)/log_parser.h | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -Isrc -Itests $(TEST_SOURCES) $(SRC_DIR)/log_parser.cpp $(SRC_DIR)/filter.cpp -o $@
+
+test: $(TEST_TARGET)
+	$(TEST_TARGET)
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
