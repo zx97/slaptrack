@@ -27,6 +27,7 @@
 LogBuffer::LogBuffer(size_t windowSize) : windowSize_(windowSize) {}
 
 bool LogBuffer::loadFile(const std::string& filename) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     cache_.clear();
     rawLines_.clear();
     if (!index_.buildIndex(filename)) {
@@ -68,6 +69,7 @@ void LogBuffer::loadRawWindow(size_t startLine) const {
 }
 
 size_t LogBuffer::refreshFile() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     size_t newLines = index_.refreshIndex();
     if (newLines == 0) {
         return 0;
@@ -95,6 +97,7 @@ size_t LogBuffer::refreshFile() {
 }
 
 bool LogBuffer::reopenFile(const std::string& filename) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     cache_.clear();
     rawLines_.clear();
     if (!index_.reopen(filename)) {
@@ -105,10 +108,12 @@ bool LogBuffer::reopenFile(const std::string& filename) {
 }
 
 size_t LogBuffer::getTotalLines() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return index_.getTotalLines();
 }
 
 std::optional<std::string> LogBuffer::getRawLine(size_t index) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const size_t total = index_.getTotalLines();
     if (index >= total) {
         return std::nullopt;
@@ -124,6 +129,7 @@ std::optional<std::string> LogBuffer::getRawLine(size_t index) const {
 }
 
 std::optional<LogLine> LogBuffer::getLine(size_t index) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= index_.getTotalLines()) {
         return std::nullopt;
     }
@@ -153,6 +159,7 @@ std::optional<LogLine> LogBuffer::getLine(size_t index) {
 }
 
 void LogBuffer::prefetchAround(size_t centerIndex, int radius) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     size_t start = (centerIndex > (size_t)radius) ? centerIndex - radius : 0;
     size_t end = std::min(centerIndex + radius, index_.getTotalLines());
     
@@ -164,5 +171,6 @@ void LogBuffer::prefetchAround(size_t centerIndex, int radius) {
 }
 
 void LogBuffer::clearCache() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     cache_.clear();
 }

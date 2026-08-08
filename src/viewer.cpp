@@ -92,6 +92,7 @@ Viewer::Viewer(const std::string& filename, bool followMode, LogFormat logFormat
 }
 
 Viewer::~Viewer() {
+    stopWrapWorker();
     if (followFd_ >= 0) {
         if (followWatchFd_ >= 0) {
             inotify_rm_watch(followFd_, followWatchFd_);
@@ -349,6 +350,7 @@ void Viewer::run() {
     }
 
     restoreTerminal();
+    stopWrapWorker();
 }
 
 void Viewer::fullRedraw(bool recomputeRows) {
@@ -381,94 +383,293 @@ void Viewer::fullRedraw(bool recomputeRows) {
 }
 
 void Viewer::recalculateScreenRows() {
-    lineScreenRows_.clear();
+    // Wrap-mode OFF: synchronous, fast (1 row per line) and the worker
+    // has nothing to do — make sure it is stopped before we touch the
+    // cache directly.
     if (!wrapLines_) {
+        stopWrapWorker();
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        lineScreenRows_.clear();
         lineScreenRows_.resize(visibleIndices_.size(), 1);
+        wrapWidth_ = 0;
+        wrapSnapshotVersion_ = wrapContentVersion_;
+        ++wrapGen_;
+        wrapCompletedGen_ = wrapGen_;
         return;
     }
-    
-    int contentWidth = termWidth_;
-    if (showLineNumbers_) {
-        size_t totalLines = buffer_.getTotalLines();
-        int numWidth = std::to_string(totalLines).length() + 2;
-        contentWidth -= numWidth;
+
+    if (visibleIndices_.empty()) {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        lineScreenRows_.clear();
+        ++wrapGen_;
+        wrapCompletedGen_ = wrapGen_;
+        return;
     }
-    
-    for (size_t i = 0; i < visibleIndices_.size(); i++) {
-        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
-        if (!raw) {
-            lineScreenRows_.push_back(1);
-            continue;
+
+    const int contentWidth = getContentWidthForWrap();
+
+    // Fast path: if the cache is already in sync with the current
+    // visible-row content and the same content width, do nothing.  This
+    // is what lets scroll/pageUp/pageDown NOT restart the worker.
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        const bool upToDate = (wrapCompletedGen_ == wrapGen_)
+                           && (wrapWidth_ == contentWidth)
+                           && (wrapSnapshotVersion_ == wrapContentVersion_)
+                           && (lineScreenRows_.size() == wrapSnapshot_.size())
+                           && (wrapSnapshot_.size() == visibleIndices_.size());
+        if (upToDate) {
+            return;
         }
-        
-        int len = (int)buffer_.getParser().renderedLength(*raw);
-        int rows = (len + contentWidth - 1) / contentWidth;
-        if (rows < 1) rows = 1;
-        lineScreenRows_.push_back(rows);
     }
+
+    // Small logs: compute synchronously.  The cost is bounded and avoids
+    // spawning a thread for a job that finishes in a millisecond.
+    static constexpr size_t kWrapSyncThreshold = 4096;
+    if (visibleIndices_.size() <= kWrapSyncThreshold) {
+        stopWrapWorker();   // any prior thread is obsolete
+        std::vector<int> rows;
+        rows.reserve(visibleIndices_.size());
+        computeWrapRowsSync(0, visibleIndices_.size(), contentWidth, rows);
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        lineScreenRows_.swap(rows);
+        wrapWidth_ = contentWidth;
+        wrapSnapshot_ = visibleIndices_;
+        wrapSnapshotVersion_ = wrapContentVersion_;
+        ++wrapGen_;
+        wrapCompletedGen_ = wrapGen_;
+        wrapPopupPct_ = -1;
+        return;
+    }
+
+    // Big logs: hand off to the background worker.  Returns immediately
+    // so the UI thread stays responsive.  The progress popup and the
+    // redraw are driven by the ERR-tick pump.
+    startWrapCompute(contentWidth);
 }
 
 void Viewer::toggleWrap() {
     wrapLines_ = !wrapLines_;
 
     if (wrapLines_) {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
         lineScreenRows_.clear();
     } else {
+        stopWrapWorker();
+        std::lock_guard<std::mutex> lk(wrapMutex_);
         lineScreenRows_.clear();
         lineScreenRows_.resize(visibleIndices_.size(), 1);
+    }
+    // re-evaluate row cache: small logs compute synchronously, large
+    // ones spawn the background worker which fills the cache as the
+    // user continues navigating.
+    if (wrapLines_) {
+        recalculateScreenRows();
     }
     fullRedraw(false);
 }
 
 void Viewer::ensureScreenRowsCachedUpTo(size_t) {
+    // The actual row computation now runs on the background worker
+    // started by recalculateScreenRows().  drawContent() and redrawLine()
+    // call this as a "is the cache good enough?" probe; if it is, the
+    // pump hides the popup.  Only the rare case where the worker is
+    // idle but the cache is short requires a kick here.
     if (!wrapLines_) return;
     if (visibleIndices_.empty()) return;
 
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        const size_t total = visibleIndices_.size();
+        const size_t targetIdx = std::min<size_t>(
+            (size_t)scrollOffset_ + (size_t)(termHeight_ - 2), total);
+        if (lineScreenRows_.size() >= targetIdx) return;
+        if (wrapCompletedGen_ != wrapGen_) return;
+    }
+
+    recalculateScreenRows();
+}
+
+int Viewer::getContentWidthForWrap() const {
     int contentWidth = termWidth_;
     if (showLineNumbers_) {
         size_t totalLines = buffer_.getTotalLines();
-        int numWidth = std::to_string(totalLines).length() + 2;
+        int numWidth = (int)std::to_string(totalLines).length() + 2;
         contentWidth -= numWidth;
     }
     if (contentWidth < 1) contentWidth = 1;
+    return contentWidth;
+}
 
+void Viewer::computeWrapRowsSync(size_t start, size_t end, int contentWidth,
+                                 std::vector<int>& out) {
+    out.clear();
+    out.reserve(end - start);
+    for (size_t i = start; i < end; i++) {
+        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (!raw) {
+            out.push_back(1);
+            continue;
+        }
+        int len = (int)buffer_.getParser().renderedLength(*raw);
+        int rows = (len + contentWidth - 1) / contentWidth;
+        if (rows < 1) rows = 1;
+        out.push_back(rows);
+    }
+}
+
+int Viewer::wrapRowAt(size_t i) const {
+    std::lock_guard<std::mutex> lk(wrapMutex_);
+    if (i >= lineScreenRows_.size()) return 1;
+    return lineScreenRows_[i];
+}
+
+void Viewer::startWrapCompute(int contentWidth) {
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        if (wrapCompletedGen_ == wrapGen_
+            && wrapWidth_ == contentWidth
+            && wrapSnapshotVersion_ == wrapContentVersion_
+            && wrapSnapshot_.size() == visibleIndices_.size()) {
+            return;
+        }
+        ++wrapGen_;
+        wrapWidth_ = contentWidth;
+        wrapSnapshot_ = visibleIndices_;
+        wrapSnapshotVersion_ = wrapContentVersion_;
+        wrapCompletedGen_ = 0;
+        wrapJobPending_ = true;
+        lineScreenRows_.clear();
+        lineScreenRows_.reserve(wrapSnapshot_.size());
+    }
+    if (!wrapWorker_.joinable()) {
+        wrapWorker_ = std::thread(&Viewer::wrapWorkerMain, this);
+    }
+    wrapCv_.notify_one();
+    wrapPopupPct_ = -1;
+}
+
+void Viewer::stopWrapWorker() {
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        if (!wrapWorker_.joinable()) {
+            wrapJobPending_ = false;
+            return;
+        }
+        wrapWorkerStop_ = true;
+        wrapJobPending_ = true;
+    }
+    wrapCv_.notify_all();
+    if (wrapWorker_.joinable()) {
+        wrapWorker_.join();
+    }
+    std::lock_guard<std::mutex> lk(wrapMutex_);
+    wrapWorkerStop_ = false;
+    wrapJobPending_ = false;
+    wrapWorker_ = std::thread();
+}
+
+void Viewer::wrapWorkerMain() {
+    static constexpr size_t kBatch = 256;
+    static constexpr auto kYield = std::chrono::milliseconds(1);
+
+    std::unique_lock<std::mutex> lk(wrapMutex_);
+    while (true) {
+        wrapCv_.wait(lk, [&] {
+            return wrapWorkerStop_ || wrapJobPending_;
+        });
+        if (wrapWorkerStop_) {
+            return;
+        }
+        wrapJobPending_ = false;
+
+        const uint64_t jobGen = wrapGen_;
+        const std::vector<size_t> snapshot = wrapSnapshot_;
+        const int width = wrapWidth_;
+        const size_t total = snapshot.size();
+        lk.unlock();
+
+        for (size_t cur = 0; cur < total; ) {
+            const size_t end = std::min(cur + kBatch, total);
+            std::vector<int> batch;
+            batch.reserve(end - cur);
+            for (size_t i = cur; i < end; i++) {
+                std::optional<std::string> raw = buffer_.getRawLine(snapshot[i]);
+                if (!raw) {
+                    batch.push_back(1);
+                    continue;
+                }
+                int len = (int)buffer_.getParser().renderedLength(*raw);
+                int rows = (len + width - 1) / width;
+                if (rows < 1) rows = 1;
+                batch.push_back(rows);
+            }
+
+            lk.lock();
+            // If a newer job was queued (W toggled, filter applied,
+            // resize, …) abandon this one — startWrapCompute() has
+            // already cleared the cache and bumped the generation.
+            if (wrapGen_ != jobGen) {
+                lk.unlock();
+                break;
+            }
+            lineScreenRows_.insert(lineScreenRows_.end(),
+                                   batch.begin(), batch.end());
+            lk.unlock();
+            cur = end;
+            if (cur < total) {
+                // 1 ms is well below wgetch's 10 ms timeout, so the UI
+                // thread is never starved between batches.
+                std::this_thread::sleep_for(kYield);
+            }
+        }
+
+        lk.lock();
+        if (wrapGen_ == jobGen) {
+            wrapCompletedGen_ = jobGen;
+        }
+        lk.unlock();
+    }
+}
+
+void Viewer::pumpWrapProgress() {
+    if (!wrapLines_) return;
+
+    size_t have = 0;
+    bool done = false;
+    {
+        std::lock_guard<std::mutex> lk(wrapMutex_);
+        have = lineScreenRows_.size();
+        done = (wrapCompletedGen_ == wrapGen_ && wrapGen_ != 0);
+    }
     const size_t total = visibleIndices_.size();
-    const size_t targetIdx = scrollOffset_ + (size_t)(termHeight_ - 2);
-    const size_t cached = lineScreenRows_.size();
+    if (total == 0) {
+        if (showPopup_) hidePopupNoRedraw();
+        return;
+    }
+    const size_t needed = std::min<size_t>(
+        (size_t)scrollOffset_ + (size_t)(termHeight_ - 2), total);
 
-    if (cached >= std::min(targetIdx, total)) {
-        if (showPopup_) { hidePopupNoRedraw(); }
+    if (done || have >= needed) {
+        if (showPopup_) hidePopupNoRedraw();
+        wrapPopupPct_ = -1;
         return;
     }
 
-    size_t startIdx = cached;
-    size_t endIdx = std::min(targetIdx, total);
-
-    auto now = std::chrono::steady_clock::now();
-
-    for (size_t i = startIdx; i < endIdx; i++) {
-        auto elapsed = std::chrono::steady_clock::now() - now;
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > 150) {
-            endIdx = i;
-            break;
-        }
-
-        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
-        if (!raw) {
-            lineScreenRows_.push_back(1);
-        } else {
-            int len = (int)buffer_.getParser().renderedLength(*raw);
-            int rows = (len + contentWidth - 1) / contentWidth;
-            lineScreenRows_.push_back(rows < 1 ? 1 : rows);
-        }
+    int pct = (int)(((double)have * 100.0) / (double)total);
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    if (pct == wrapPopupPct_) {
+        return;
     }
-
-    float progress = (float)lineScreenRows_.size() / (float)std::min(targetIdx, total);
-    if (progress > 1.0f) progress = 1.0f;
-    showPopup("Computing wrap... " + std::to_string((int)(progress * 100)) + "%", progress);
-
-    if (lineScreenRows_.size() >= std::min(targetIdx, total)) {
-        hidePopupNoRedraw();
+    wrapPopupPct_ = pct;
+    const std::string msg = "Computing wrap... " + std::to_string(pct) + "%";
+    if (showPopup_) {
+        popupMessage_ = msg;
+        popupProgress_ = pct / 100.0f;
+        drawPopup();
+    } else {
+        showPopup(msg, pct / 100.0f);
     }
 }
 
@@ -489,9 +690,15 @@ int Viewer::calculateLineScreenRows(const LogLine& line) {
 
 int Viewer::getScreenRowForCursorRow(int cursorRow) {
     if (!wrapLines_) return cursorRow - scrollOffset_;
-    
+
+    // Reads of lineScreenRows_ must be locked: the worker appends to
+    // the vector concurrently.  Locking around the whole sum keeps
+    // the prefix consistent.  The lock is uncontended on the UI thread
+    // (worker only holds it briefly between batches).
+    std::lock_guard<std::mutex> lk(wrapMutex_);
     int screenRow = 0;
-    for (int i = scrollOffset_; i < cursorRow && i < (int)lineScreenRows_.size(); i++) {
+    const int end = std::min<int>(cursorRow, (int)lineScreenRows_.size());
+    for (int i = scrollOffset_; i < end; i++) {
         screenRow += lineScreenRows_[i];
     }
     return screenRow;
@@ -499,12 +706,13 @@ int Viewer::getScreenRowForCursorRow(int cursorRow) {
 
 int Viewer::getCursorRowForScreenRow(int screenRow) {
     if (!wrapLines_) return screenRow + scrollOffset_;
-    
+
+    std::lock_guard<std::mutex> lk(wrapMutex_);
     int currentScreenRow = 0;
     for (size_t i = scrollOffset_; i < lineScreenRows_.size(); i++) {
         currentScreenRow += lineScreenRows_[i];
         if (currentScreenRow > screenRow) {
-            return i;
+            return (int)i;
         }
     }
     return (int)visibleIndices_.size() - 1;
@@ -531,7 +739,7 @@ void Viewer::drawContent() {
         drawLine(currentScreenRow, *line, visibleIndices_[i], isHighlighted);
 
         if (wrapLines_) {
-            int rows = (i < (int)lineScreenRows_.size()) ? lineScreenRows_[i] : 1;
+            int rows = wrapRowAt(i);
             currentScreenRow += rows;
         } else {
             currentScreenRow++;
@@ -934,6 +1142,9 @@ void Viewer::handleInput() {
     int ch = wgetch(mainWindow_);
     
     if (ch == ERR) {
+        // Idle tick (10 ms wgetch timeout): drive the wrap-compute
+        // progress popup and let the worker make further progress.
+        pumpWrapProgress();
         return;
     }
     
@@ -1202,6 +1413,7 @@ void Viewer::handleFollowMode() {
             }
         }
 
+        ++wrapContentVersion_;
         recalculateScreenRows();
 
         if (autoScroll_) {
@@ -1213,6 +1425,7 @@ void Viewer::handleFollowMode() {
     } else if (fileVanished) {
         // File was replaced but contained no new lines yet; still
         // redraw so the new content shows up.
+        ++wrapContentVersion_;
         recalculateScreenRows();
         fullRedraw();
     }
@@ -1736,6 +1949,7 @@ void Viewer::buildFilteredIndices() {
         for (size_t i = 0; i < totalLines; i++) {
             visibleIndices_.push_back(i);
         }
+        ++wrapContentVersion_;
         recalculateScreenRows();
         hidePopup();
         filtering_ = false;
@@ -1790,6 +2004,7 @@ void Viewer::buildFilteredIndices() {
     }
 
     visibleIndices_ = std::move(newVisibleIndices);
+    ++wrapContentVersion_;
     recalculateScreenRows();
 
     // Hold the popup on screen for at least MIN_POPUP_MS so the user

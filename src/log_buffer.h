@@ -26,6 +26,7 @@
 #include <vector>
 #include <optional>
 #include <unordered_map>
+#include <mutex>
 
 class LogBuffer {
 public:
@@ -72,4 +73,11 @@ private:
     // Raw text window: we never hold the whole file in RAM.
     mutable size_t rawPageStart_ = 0;
     mutable std::vector<std::string> rawLines_;
+
+    // All public methods that touch rawLines_/rawPageStart_/cache_/index_/
+    // parser_ take this lock first.  Recursive because getLine() calls
+    // getRawLine() and prefetchAround() calls getLine() — the public
+    // boundary is the only safe place to take the lock without an extra
+    // unlocked helper.
+    mutable std::recursive_mutex mutex_;
 };

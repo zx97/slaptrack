@@ -1,5 +1,8 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
+CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -pthread
+# -pthread on the link line is required for std::thread; some glibc
+# versions refuse to link without it even when the objects were
+# compiled with -pthread.
 
 # -------------------------------------------------------------------
 # std::filesystem linkage: GCC < 9 needs -lstdc++fs; GCC >= 9 does not
@@ -7,7 +10,7 @@ CXXFLAGS = -std=c++17 -O2 -Wall -Wextra
 # toolchains the separate archive is still present and must be linked.
 # -------------------------------------------------------------------
 GCC_MAJOR := $(shell $(CXX) -dumpversion | cut -d. -f1)
-LDFLAGS = -lncurses -lz -lbz2 -llzma
+LDFLAGS = -lncurses -lz -lbz2 -llzma -pthread
 ifneq ($(shell [ "$(GCC_MAJOR)" -lt 9 ] && echo old),)
   LDFLAGS += -lstdc++fs
 endif
@@ -51,10 +54,10 @@ $(TARGET): $(OBJECTS) version
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
 
-$(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp $(VERSION_H) | $(BUILD_DIR)
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -DBUILD_NUMBER=$(BUILD_NUM) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(VERSION_H) | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -DBUILD_NUMBER=$(BUILD_NUM) -c $< -o $@
 
 $(TEST_TARGET): $(TEST_SOURCES) $(SRC_DIR)/log_parser.cpp $(SRC_DIR)/log_parser.h $(SRC_DIR)/filter.cpp $(SRC_DIR)/filter.h $(SRC_DIR)/log_parser.h | $(BUILD_DIR)
