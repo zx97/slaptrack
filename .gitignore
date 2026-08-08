@@ -4,6 +4,7 @@
 build/
 build_number.txt
 slaptrack
+src/version.h
 
 # === Editor temporaries ===
 *~

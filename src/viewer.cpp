@@ -433,14 +433,16 @@ void Viewer::ensureScreenRowsCachedUpTo(size_t) {
     if (contentWidth < 1) contentWidth = 1;
 
     const size_t total = visibleIndices_.size();
+    const size_t targetIdx = scrollOffset_ + (size_t)(termHeight_ - 2);
     const size_t cached = lineScreenRows_.size();
-    if (cached >= total) {
+
+    if (cached >= std::min(targetIdx, total)) {
         if (showPopup_) { hidePopupNoRedraw(); }
         return;
     }
 
     size_t startIdx = cached;
-    size_t endIdx = std::min(startIdx + 200, total);
+    size_t endIdx = std::min(targetIdx, total);
 
     auto now = std::chrono::steady_clock::now();
 
@@ -461,11 +463,11 @@ void Viewer::ensureScreenRowsCachedUpTo(size_t) {
         }
     }
 
-    float progress = (float)lineScreenRows_.size() / (float)total;
+    float progress = (float)lineScreenRows_.size() / (float)std::min(targetIdx, total);
     if (progress > 1.0f) progress = 1.0f;
     showPopup("Computing wrap... " + std::to_string((int)(progress * 100)) + "%", progress);
 
-    if (lineScreenRows_.size() >= total) {
+    if (lineScreenRows_.size() >= std::min(targetIdx, total)) {
         hidePopupNoRedraw();
     }
 }
@@ -516,7 +518,7 @@ void Viewer::drawContent() {
 
     for (int i = scrollOffset_; i < (int)visibleIndices_.size() && currentScreenRow < contentHeight; i++) {
         if (wrapLines_) {
-            ensureScreenRowsCachedUpTo(i);
+            ensureScreenRowsCachedUpTo(scrollOffset_ + contentHeight);
         }
 
         auto line = buffer_.getLine(visibleIndices_[i]);
@@ -775,6 +777,9 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
 }
 
 void Viewer::redrawLine(int cursorRow, bool isHighlighted) {
+    if (wrapLines_) {
+        ensureScreenRowsCachedUpTo(cursorRow);
+    }
     int screenRow = getScreenRowForCursorRow(cursorRow);
     if (screenRow < 0 || screenRow >= termHeight_ - 2) return;
     if (cursorRow >= (int)visibleIndices_.size()) return;
@@ -905,7 +910,7 @@ void Viewer::drawPopup() {
     mvwprintw(popupWindow_, 3, popupWidth - (int)pct.length() - 2, "%s", pct.c_str());
 
     touchwin(popupWindow_);
-    wnoutrefresh(popupWindow_);
+    wrefresh(popupWindow_);
 }
 
 void Viewer::hidePopup() {
