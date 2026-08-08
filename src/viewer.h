@@ -58,7 +58,7 @@ private:
     void handleCommandMode();
     
     void toggleWrap();
-    bool computeWrappedScreenRowsWithProgress();
+    void ensureScreenRowsCachedUpTo(size_t);
     
     void moveCursorUp();
     void moveCursorDown();

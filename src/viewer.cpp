@@ -410,19 +410,9 @@ void Viewer::recalculateScreenRows() {
 
 void Viewer::toggleWrap() {
     wrapLines_ = !wrapLines_;
-    
+
     if (wrapLines_) {
-        // Turning wrap ON requires computing the on-screen row count of
-        // every visible line (O(n); large files only need a popup, and
-        // draw on-demand from the buffer — the file is not held fully
-        // in memory).
-        if (!computeWrappedScreenRowsWithProgress()) {
-            wrapLines_ = false;
-            lineScreenRows_.clear();
-            lineScreenRows_.resize(visibleIndices_.size(), 1);
-            fullRedraw();
-            return;
-        }
+        lineScreenRows_.clear();
     } else {
         lineScreenRows_.clear();
         lineScreenRows_.resize(visibleIndices_.size(), 1);
@@ -430,10 +420,10 @@ void Viewer::toggleWrap() {
     fullRedraw(false);
 }
 
-bool Viewer::computeWrappedScreenRowsWithProgress() {
-    lineScreenRows_.clear();
-    lineScreenRows_.reserve(visibleIndices_.size());
-    
+void Viewer::ensureScreenRowsCachedUpTo(size_t) {
+    if (!wrapLines_) return;
+    if (visibleIndices_.empty()) return;
+
     int contentWidth = termWidth_;
     if (showLineNumbers_) {
         size_t totalLines = buffer_.getTotalLines();
@@ -441,67 +431,43 @@ bool Viewer::computeWrappedScreenRowsWithProgress() {
         contentWidth -= numWidth;
     }
     if (contentWidth < 1) contentWidth = 1;
-    
-    const size_t rangeSize = visibleIndices_.size();
 
-    showPopup("Wrapping lines... (Esc to cancel)", 0.0f);
-    touchwin(mainWindow_);
-    wnoutrefresh(mainWindow_);
-    touchwin(filterWindow_);
-    wnoutrefresh(filterWindow_);
-    touchwin(statusWindow_);
-    wnoutrefresh(statusWindow_);
-    doupdate();
+    const size_t total = visibleIndices_.size();
+    const size_t cached = lineScreenRows_.size();
+    if (cached >= total) {
+        if (showPopup_) { hidePopupNoRedraw(); }
+        return;
+    }
 
-    nodelay(stdscr, TRUE);
-    g_interrupted = 0;
-    
-    bool cancelled = false;
-    size_t lastProgressLine = 0;
-    for (size_t i = 0; i < rangeSize; i++) {
-        if (g_interrupted) { cancelled = true; break; }
-        
+    size_t startIdx = cached;
+    size_t endIdx = std::min(startIdx + 200, total);
+
+    auto now = std::chrono::steady_clock::now();
+
+    for (size_t i = startIdx; i < endIdx; i++) {
+        auto elapsed = std::chrono::steady_clock::now() - now;
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > 150) {
+            endIdx = i;
+            break;
+        }
+
         std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
         if (!raw) {
             lineScreenRows_.push_back(1);
         } else {
             int len = (int)buffer_.getParser().renderedLength(*raw);
             int rows = (len + contentWidth - 1) / contentWidth;
-            if (rows < 1) rows = 1;
-            lineScreenRows_.push_back(rows);
-        }
-        
-        if (i - lastProgressLine >= 1000) {
-            lastProgressLine = i;
-            if (g_interrupted) { cancelled = true; break; }
-            int ch = getch();
-            if (ch != ERR) {
-                if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
-                    ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
-                    cancelled = true;
-                    g_interrupted = 1;
-                } else {
-                    ungetch(ch);
-                }
-            }
-            if (cancelled) break;
-            if (rangeSize > 0) {
-                float progress = (float)(i + 1) / (float)rangeSize;
-                if (progress > 1.0f) progress = 1.0f;
-                showPopup("Wrapping rows... (Esc to cancel)", progress);
-            }
+            lineScreenRows_.push_back(rows < 1 ? 1 : rows);
         }
     }
-    
-    nodelay(stdscr, FALSE);
-    timeout(10);
-    
-    if (cancelled) {
+
+    float progress = (float)lineScreenRows_.size() / (float)total;
+    if (progress > 1.0f) progress = 1.0f;
+    showPopup("Computing wrap... " + std::to_string((int)(progress * 100)) + "%", progress);
+
+    if (lineScreenRows_.size() >= total) {
         hidePopupNoRedraw();
-        return false;
     }
-    hidePopupNoRedraw();
-    return true;
 }
 
 int Viewer::calculateLineScreenRows(const LogLine& line) {
@@ -544,22 +510,26 @@ int Viewer::getCursorRowForScreenRow(int screenRow) {
 
 void Viewer::drawContent() {
     werase(mainWindow_);
-    
+
     int contentHeight = termHeight_ - 2;
     int currentScreenRow = 0;
-    
+
     for (int i = scrollOffset_; i < (int)visibleIndices_.size() && currentScreenRow < contentHeight; i++) {
+        if (wrapLines_) {
+            ensureScreenRowsCachedUpTo(i);
+        }
+
         auto line = buffer_.getLine(visibleIndices_[i]);
         if (!line) {
             currentScreenRow++;
             continue;
         }
-        
+
         bool isHighlighted = (i == cursorRow_);
         drawLine(currentScreenRow, *line, visibleIndices_[i], isHighlighted);
-        
+
         if (wrapLines_) {
-            int rows = lineScreenRows_[i];
+            int rows = (i < (int)lineScreenRows_.size()) ? lineScreenRows_[i] : 1;
             currentScreenRow += rows;
         } else {
             currentScreenRow++;
