@@ -28,7 +28,7 @@
 #include <string>
 #include <unistd.h>
 
-#define SLAPTRACK_VERSION "1.1.0"
+#define SLAPTRACK_VERSION "1.2.0"
 
 namespace {
 

@@ -682,7 +682,7 @@ inline const std::string DOCUMENTATION_TEXT = R"DOC(# slaptrack — OpenLDAP Log
 
 **SPDX-License-Identifier:** AGPL-3.0-or-later
 **License:** GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Author:** Manuel FLURY
 **Copyright:** (c) 2026 Manuel FLURY. All rights reserved.
 
