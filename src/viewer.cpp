@@ -122,7 +122,19 @@ void Viewer::initTerminal() {
     setupColors();
     
     getmaxyx(stdscr, termHeight_, termWidth_);
-    
+
+    if (termHeight_ < 3 || termWidth_ < 10) {
+        // The UI needs at least 3 rows (content + filter + status) and a
+        // usable width; newwin() with non-positive dimensions returns NULL
+        // and every subsequent draw would crash.
+        endwin();
+        std::cerr << "Error: terminal too small for slaptrack "
+                  << "(need at least 3 rows x 10 cols, have "
+                  << termHeight_ << "x" << termWidth_ << ")\n";
+        running_.store(false);
+        return;
+    }
+
     mainWindow_ = newwin(termHeight_ - 2, termWidth_, 0, 0);
     filterWindow_ = newwin(1, termWidth_, termHeight_ - 2, 0);
     statusWindow_ = newwin(1, termWidth_, termHeight_ - 1, 0);
@@ -145,7 +157,7 @@ void Viewer::initTerminal() {
 }
 
 void Viewer::stop() {
-    running_ = false;
+    running_.store(false);
 }
 
 void Viewer::restoreTerminal() {
@@ -292,9 +304,10 @@ int Viewer::getColorForToken(TokenType type) {
 
 void Viewer::run() {
     initTerminal();
+    if (!running_.load()) return;
     fullRedraw();
 
-    while (running_ && !g_interrupted) {
+    while (running_.load() && !g_interrupted) {
         if (followMode_) {
             handleFollowMode();
         }
@@ -617,8 +630,8 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
 void Viewer::redrawLine(int cursorRow, bool isHighlighted) {
     int screenRow = getScreenRowForCursorRow(cursorRow);
     if (screenRow < 0 || screenRow >= termHeight_ - 2) return;
-    if (cursorRow + scrollOffset_ >= (int)visibleIndices_.size()) return;
-    size_t lineIdx = visibleIndices_[cursorRow + scrollOffset_];
+    if (cursorRow >= (int)visibleIndices_.size()) return;
+    size_t lineIdx = visibleIndices_[cursorRow];
     auto line = buffer_.getLine(lineIdx);
     if (!line) return;
     drawLine(screenRow, *line, lineIdx, isHighlighted);
@@ -669,8 +682,8 @@ void Viewer::drawStatusBar() {
     status += " | " + std::string(SCHEMA_NAMES[currentSchema_]);
     if (autoColor_) status += " [Auto]";
 
-    if (cursorRow_ + scrollOffset_ < (int)visibleIndices_.size()) {
-        size_t lineNum = visibleIndices_[cursorRow_ + scrollOffset_];
+    if (cursorRow_ < (int)visibleIndices_.size()) {
+        size_t lineNum = visibleIndices_[cursorRow_];
         status += " | L:" + std::to_string(lineNum + 1) + "/" + std::to_string(buffer_.getTotalLines());
         
         auto line = buffer_.getLine(lineNum);
@@ -775,7 +788,7 @@ void Viewer::handleInput() {
     }
     
     if (ch == 'q' || ch == 'Q') {
-        running_ = false;
+        running_.store(false);
         return;
     }
     
@@ -1016,14 +1029,19 @@ void Viewer::handleFollowMode() {
                                            IN_DELETE_SELF);
         visibleIndices_.clear();
         size_t totalLines = buffer_.getTotalLines();
-        for (size_t i = 0; i < totalLines; i++) visibleIndices_.push_back(i);
+        for (size_t i = 0; i < totalLines; i++) {
+            if (linePassesFilters(i)) visibleIndices_.push_back(i);
+        }
     }
 
     size_t newLines = buffer_.refreshFile();
     if (newLines > 0) {
         size_t totalLines = buffer_.getTotalLines();
-        while (visibleIndices_.size() < totalLines) {
-            visibleIndices_.push_back(visibleIndices_.size());
+        size_t startSearch = totalLines - newLines;
+        for (size_t i = startSearch; i < totalLines; i++) {
+            if (linePassesFilters(i)) {
+                visibleIndices_.push_back(i);
+            }
         }
 
         recalculateScreenRows();
@@ -1088,8 +1106,8 @@ void Viewer::moveToLine(size_t lineNum) {
         scrollOffset_ = cursorRow_ - contentHeight + 1;
     }
     
-    if ((size_t)(cursorRow_ + scrollOffset_) < visibleIndices_.size()) {
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 100);
+    if (cursorRow_ < (int)visibleIndices_.size()) {
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
     
     fullRedraw();
@@ -1104,11 +1122,11 @@ void Viewer::moveCursorToLineStart() {
 }
 
 void Viewer::moveCursorToLineEnd() {
-    if (cursorRow_ + scrollOffset_ >= (int)visibleIndices_.size()) {
+if (cursorRow_ >= (int)visibleIndices_.size()) {
         return;
     }
-    
-    auto line = buffer_.getLine(visibleIndices_[cursorRow_ + scrollOffset_]);
+
+    auto line = buffer_.getLine(visibleIndices_[cursorRow_]);
     if (line) {
         cursorCol_ = std::min((int)line->raw.length(), termWidth_ - 1);
         int screenRow = getScreenRowForCursorRow(cursorRow_);
@@ -1119,9 +1137,9 @@ void Viewer::moveCursorToLineEnd() {
 }
 
 std::optional<Token> Viewer::getTokenAtCursor() {
-    if (cursorRow_ + scrollOffset_ >= (int)visibleIndices_.size()) return std::nullopt;
-    
-    auto line = buffer_.getLine(visibleIndices_[cursorRow_ + scrollOffset_]);
+if (cursorRow_ >= (int)visibleIndices_.size()) return std::nullopt;
+
+    auto line = buffer_.getLine(visibleIndices_[cursorRow_]);
     if (!line) return std::nullopt;
     
     for (const auto& token : line->tokens) {
@@ -1133,24 +1151,8 @@ std::optional<Token> Viewer::getTokenAtCursor() {
     return std::nullopt;
 }
 
-std::optional<Token> Viewer::getTokenAtPosition(int row, int col) {
-    int lineIdx = scrollOffset_ + row;
-    if (lineIdx >= (int)visibleIndices_.size()) return std::nullopt;
-    
-    auto line = buffer_.getLine(visibleIndices_[lineIdx]);
-    if (!line) return std::nullopt;
-    
-    for (const auto& token : line->tokens) {
-        if (col >= (int)token.start_pos && col < (int)token.end_pos) {
-            return token;
-        }
-    }
-    
-    return std::nullopt;
-}
-
 std::optional<size_t> Viewer::getTokenIndexAtPosition(int row, int col) {
-    int lineIdx = scrollOffset_ + row;
+    int lineIdx = row;
     if (lineIdx >= (int)visibleIndices_.size()) return std::nullopt;
     
     auto line = buffer_.getLine(visibleIndices_[lineIdx]);
@@ -1178,7 +1180,7 @@ void Viewer::activateFilter() {
             filter.key = "conn";
             filter.value = token->value.substr(5);
 
-            size_t currentLine = visibleIndices_[cursorRow_ + scrollOffset_];
+            size_t currentLine = visibleIndices_[cursorRow_];
             size_t connStart = findConnectionStart(currentLine, filter.value);
             size_t connEnd = findConnectionEnd(currentLine, filter.value);
 
@@ -1377,7 +1379,7 @@ void Viewer::moveCursorUp() {
             return;
         }
 
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 50);
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 50);
 
         // Update which token the cursor is on so the highlight follows.
         auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_);
@@ -1410,7 +1412,7 @@ void Viewer::moveCursorDown() {
             return;
         }
 
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 50);
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 50);
 
         auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_);
         if (tokenIdx.has_value()) currentTokenIndex_ = tokenIdx.value();
@@ -1430,8 +1432,8 @@ void Viewer::pageUp() {
     cursorRow_ = std::max(0, cursorRow_ - contentHeight);
     scrollOffset_ = std::max(0, scrollOffset_ - contentHeight);
     
-    if ((size_t)(cursorRow_ + scrollOffset_) < visibleIndices_.size()) {
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 100);
+    if (cursorRow_ < (int)visibleIndices_.size()) {
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
     
     fullRedraw();
@@ -1443,8 +1445,8 @@ void Viewer::pageDown() {
     scrollOffset_ = std::min((int)visibleIndices_.size() - 1, scrollOffset_ + contentHeight);
     if (scrollOffset_ < 0) scrollOffset_ = 0;
     
-    if ((size_t)(cursorRow_ + scrollOffset_) < visibleIndices_.size()) {
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 100);
+    if (cursorRow_ < (int)visibleIndices_.size()) {
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
     
     fullRedraw();
@@ -1468,11 +1470,26 @@ void Viewer::goToBottom() {
     scrollOffset_ = std::max(0, (int)visibleIndices_.size() - contentHeight);
     autoScroll_ = followMode_;
     
-    if ((size_t)(cursorRow_ + scrollOffset_) < visibleIndices_.size()) {
-        buffer_.prefetchAround(visibleIndices_[cursorRow_ + scrollOffset_], 100);
+    if (cursorRow_ < (int)visibleIndices_.size()) {
+        buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
     
     fullRedraw();
+}
+
+// Returns true when the line at `lineIndex` should be visible given the
+// current filter stack.  Used by the follow-mode appends (rotation and
+// refresh) so newly arriving lines obey active filters instead of being
+// shown unconditionally.
+bool Viewer::linePassesFilters(size_t lineIndex) {
+    if (filterStack_.empty()) return true;
+
+    const std::string& raw = buffer_.getRawLine(lineIndex);
+    if (raw.empty()) return false;
+    if (!filterStack_.candidateInRaw(raw)) return false;
+
+    LogLine line = buffer_.getParser().parseLine(raw);
+    return filterStack_.matches(line, lineIndex);
 }
 
 size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {

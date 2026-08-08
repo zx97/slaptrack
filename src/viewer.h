@@ -27,6 +27,7 @@
 #include <vector>
 #include <optional>
 #include <chrono>
+#include <atomic>
 #include <ncurses.h>
 
 class Viewer {
@@ -67,7 +68,6 @@ private:
     void moveCursorToLineEnd();
     
     std::optional<Token> getTokenAtCursor();
-    std::optional<Token> getTokenAtPosition(int row, int col);
     std::optional<size_t> getTokenIndexAtPosition(int row, int col);
     
     void activateFilter();
@@ -80,6 +80,7 @@ private:
     void prevSearchResult();
     
     void buildFilteredIndices();
+    bool linePassesFilters(size_t lineIndex);
     size_t findConnectionStart(size_t fromLine, const std::string& connId);
     size_t findConnectionEnd(size_t fromLine, const std::string& connId);
     
@@ -112,7 +113,7 @@ private:
     int cursorCol_;
     int termWidth_;
     int termHeight_;
-    bool running_;
+    std::atomic<bool> running_;
     
     std::string searchQuery_;
     std::vector<size_t> searchResults_;
