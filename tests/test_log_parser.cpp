@@ -144,3 +144,73 @@ TEST(parse_nentries) {
     }
     CHECK(found);
 }
+
+// ---------------------------------------------------------------------------
+// Log format conversion (--log-format)
+// ---------------------------------------------------------------------------
+
+TEST(format_default_keeps_rfc3339) {
+    const std::string line = "2024-01-15T10:30:00.123Z conn=7 op=1 BIND";
+    LogLine l = parse(line);
+    CHECK_EQ(l.raw, line);
+}
+
+TEST(format_auto_detects_debug_hex) {
+    // sec=1, frac 0x12345 = 74565 usec (5-digit frac → usec path)
+    LogParser p;
+    p.setLogFormat(LogFormat::AUTO);
+    LogLine l = p.parseLine("1.12345 conn=2 fd=12 ACCEPT");
+    CHECK_EQ(l.raw, "1970-01-01T00:00:01.074565Z conn=2 fd=12 ACCEPT");
+    CHECK_EQ(l.tokens[0].type, TokenType::TIMESTAMP);
+    CHECK_EQ(l.tokens[0].value, "1970-01-01T00:00:01.074565Z");
+}
+
+TEST(format_debug_hex_nanoseconds) {
+    // sec=1, frac 0x1 = 1 ns (7-digit frac → ns path)
+    LogParser p;
+    p.setLogFormat(LogFormat::DEBUG);
+    LogLine l = p.parseLine("1.0000001 conn=3 fd=5");
+    CHECK_EQ(l.raw, "1970-01-01T00:00:01.000000001Z conn=3 fd=5");
+}
+
+TEST(format_debug_keeps_thread_id) {
+    LogParser p;
+    p.setLogFormat(LogFormat::DEBUG);
+    LogLine l = p.parseLine("1.12345 0x7f9c1e33a700 conn=3");
+    CHECK_EQ(l.raw, "1970-01-01T00:00:01.074565Z 0x7f9c1e33a700 conn=3");
+}
+
+TEST(format_syslog_utc) {
+    // Syslog has no year; the decoder uses the current year (decrementing
+    // if the month is in the future).  find() is used because the rfc3339
+    // prefix starts with the year, so "T12:34:56" is not at index 0.
+    LogParser p;
+    p.setLogFormat(LogFormat::SYSLOG_UTC);
+    LogLine l = p.parseLine("Nov  9 12:34:56 host slapd[1]: conn=4");
+    CHECK(l.raw.find("T12:34:56.000000000Z") != std::string::npos);
+    CHECK_EQ(l.raw.substr(l.raw.find(' ') + 1), "host slapd[1]: conn=4");
+    CHECK_EQ(l.tokens[0].type, TokenType::TIMESTAMP);
+    CHECK_EQ(l.tokens[0].value, l.raw.substr(0, l.raw.find(' ')));
+}
+
+TEST(format_syslog_localtime_keeps_suffix) {
+    // SYSLOG_LOCALTIME is conceptually "treat the timestamp as local
+    // time", so the rendered epoch depends on the system TZ.  Only the
+    // invariant parts are asserted: a valid rfc3339 prefix and that the
+    // text after the timestamp is preserved verbatim.
+    LogParser p;
+    p.setLogFormat(LogFormat::SYSLOG_LOCALTIME);
+    LogLine l = p.parseLine("Nov  9 12:00:56 host=1");
+    CHECK(l.raw.rfind("T", 0) == std::string::npos);  // rfc3339 has a year prefix, not plain "T"
+    CHECK(l.raw.size() > 20);
+    CHECK_EQ(l.raw.substr(l.raw.find(' ') + 1), "host=1");
+}
+
+TEST(format_does_not_touch_plain_lines) {
+    // A line that is neither debug-hex nor syslog passes through unchanged
+    // even in explicit DEBUG mode (no false positive on "conn=" logs).
+    LogParser p;
+    p.setLogFormat(LogFormat::DEBUG);
+    LogLine l = p.parseLine("conn=1 op=0 RESULT");
+    CHECK_EQ(l.raw, "conn=1 op=0 RESULT");
+}

@@ -682,7 +682,7 @@ inline const std::string DOCUMENTATION_TEXT = R"DOC(# slaptrack — OpenLDAP Log
 
 **SPDX-License-Identifier:** AGPL-3.0-or-later
 **License:** GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
-**Version:** 1.2.0
+**Version:** 1.3.0
 **Author:** Manuel FLURY
 **Copyright:** (c) 2026 Manuel FLURY. All rights reserved.
 
@@ -781,6 +781,22 @@ tail -f /var/log/slapd/access.log | slaptrack -
 slaptrack - < /var/log/slapd/access.log
 ```
 
+### Specify the input log format
+
+slapd can write its access log with an epoch-prefixed timestamp
+(`olcLogFileFormat` debug output) or a classic syslog timestamp.
+slaptrack reads rfc3339 timestamps by default; for other formats use
+`--log-format`:
+
+```bash
+slaptrack --log-format debug /var/log/slapd/access.log
+slaptrack --log-format syslog-utc /var/log/slapd/access.log
+tail -f /var/log/slapd/access.log | slaptrack --log-format auto -
+```
+
+`auto` (the default) detects the debug hex prefix per line while leaving
+everything else untouched.
+
 ### Compressed logs
 
 ```bash
@@ -803,6 +819,7 @@ slaptrack --licence
 | Option | Description |
 |--------|-------------|
 | `-f` | Follow mode: stream new log lines as they arrive (like tail -f) |
+| `--log-format <fmt>` | Input log format: `auto`, `debug`, `syslog-utc`, `syslog-local`, `rfc3339` (default `auto`; `-L` alias) |
 | `-` | Read from stdin (pipe mode) |
 | `-D, --documentation` | Print full documentation to stdout and exit |
 | `-l, --licence` | Print the GNU AGPL-3.0 license to stdout and exit |

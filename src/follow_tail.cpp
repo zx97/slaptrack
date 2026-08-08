@@ -117,14 +117,15 @@ void followSignalHandler(int) {
 
 } // namespace
 
-FollowTail::FollowTail(const std::string& filename, int schema)
+FollowTail::FollowTail(const std::string& filename, int schema, LogFormat logFormat)
     : filename_(filename),
       fd_(-1),
       inotifyFd_(-1),
       watchFd_(-1),
       lastSize_(0),
       terminalRaw_(false),
-      schema_(schema) {}
+      schema_(schema),
+      logFormat_(logFormat) {}
 
 FollowTail::~FollowTail() {
     if (watchFd_ >= 0 && inotifyFd_ >= 0) {
@@ -136,27 +137,28 @@ FollowTail::~FollowTail() {
 
 void FollowTail::printColoredLine(const std::string& rawLine) {
     static thread_local LogParser parser;
+    parser.setLogFormat(logFormat_);
     LogLine line = parser.parseLine(rawLine);
+    const std::string& text = line.raw;
 
     size_t lastEnd = 0;
     for (const auto& tok : line.tokens) {
-        // Plain text between previous token and this one.
-        if (tok.start_pos > lastEnd && tok.start_pos <= rawLine.size()) {
-            std::cout << rawLine.substr(lastEnd, tok.start_pos - lastEnd);
+        if (tok.start_pos > lastEnd && tok.start_pos <= text.size()) {
+            std::cout << text.substr(lastEnd, tok.start_pos - lastEnd);
         }
         const char* c = ansiForToken(tok.type, schema_);
         if (*c) std::cout << c;
         if (isBoldToken(tok.type, schema_)) std::cout << "\x1b[1m";
-        if (tok.end_pos <= rawLine.size()) {
-            std::cout << rawLine.substr(tok.start_pos, tok.end_pos - tok.start_pos);
+        if (tok.end_pos <= text.size()) {
+            std::cout << text.substr(tok.start_pos, tok.end_pos - tok.start_pos);
         } else {
             std::cout << tok.value;
         }
         std::cout << "\x1b[0m";
         lastEnd = tok.end_pos;
     }
-    if (lastEnd < rawLine.size()) {
-        std::cout << rawLine.substr(lastEnd);
+    if (lastEnd < text.size()) {
+        std::cout << text.substr(lastEnd);
     }
     std::cout << "\n";
     std::cout.flush();
@@ -447,35 +449,38 @@ void FollowTail::run() {
 // No inotify since stdin is not a real file.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace {
-void printAnsiLine(const std::string& rawLine, int schema) {
+void printAnsiLine(const std::string& rawLine, int schema, LogFormat logFormat) {
     static thread_local LogParser parser;
+    parser.setLogFormat(logFormat);
     LogLine line = parser.parseLine(rawLine);
+    const std::string& text = line.raw;
 
     size_t lastEnd = 0;
     for (const auto& tok : line.tokens) {
-        if (tok.start_pos > lastEnd && tok.start_pos <= rawLine.size()) {
-            std::cout << rawLine.substr(lastEnd, tok.start_pos - lastEnd);
+        if (tok.start_pos > lastEnd && tok.start_pos <= text.size()) {
+            std::cout << text.substr(lastEnd, tok.start_pos - lastEnd);
         }
         const char* c = ansiForToken(tok.type, schema);
         if (*c) std::cout << c;
         if (isBoldToken(tok.type, schema)) std::cout << "\x1b[1m";
-        if (tok.end_pos <= rawLine.size()) {
-            std::cout << rawLine.substr(tok.start_pos, tok.end_pos - tok.start_pos);
+        if (tok.end_pos <= text.size()) {
+            std::cout << text.substr(tok.start_pos, tok.end_pos - tok.start_pos);
         } else {
             std::cout << tok.value;
         }
         std::cout << "\x1b[0m";
         lastEnd = tok.end_pos;
     }
-    if (lastEnd < rawLine.size()) {
-        std::cout << rawLine.substr(lastEnd);
+    if (lastEnd < text.size()) {
+        std::cout << text.substr(lastEnd);
     }
     std::cout << "\n";
     std::cout.flush();
 }
 } // namespace
 
-FollowTailStdin::FollowTailStdin(int schema) : terminalRaw_(false), schema_(schema) {}
+FollowTailStdin::FollowTailStdin(int schema, LogFormat logFormat)
+    : terminalRaw_(false), schema_(schema), logFormat_(logFormat) {}
 
 void FollowTailStdin::run() {
     const char* term = std::getenv("TERM");
@@ -545,7 +550,7 @@ void FollowTailStdin::run() {
             if (nl == std::string::npos) break;
             std::string line = carry.substr(start, nl - start);
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            printAnsiLine(line, schema_);
+            printAnsiLine(line, schema_, logFormat_);
             start = nl + 1;
         }
         carry.erase(0, start);

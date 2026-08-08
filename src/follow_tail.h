@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "log_parser.h"
 #include <string>
 
 // A simple, "tail -f" with colour implementation of slaptrack's
@@ -33,7 +34,8 @@
 //   - recovers from log rotation (IN_MOVE_SELF / IN_DELETE_SELF)
 class FollowTail {
 public:
-    explicit FollowTail(const std::string& filename, int schema = 0);
+    explicit FollowTail(const std::string& filename, int schema = 0,
+                        LogFormat logFormat = LogFormat::AUTO);
     ~FollowTail();
 
     void run();
@@ -53,16 +55,18 @@ private:
     long lastSize_;
     bool terminalRaw_;
     int schema_;
+    LogFormat logFormat_ = LogFormat::AUTO;
 };
 
 // Reads from stdin and colourises each line as it arrives.  Used by
 // `tail -f | slaptrack -` or `slaptrack -` (stdin pipe mode).
 class FollowTailStdin {
 public:
-    FollowTailStdin(int schema = 0);
+    FollowTailStdin(int schema = 0, LogFormat logFormat = LogFormat::AUTO);
     void run();
 
 private:
     bool terminalRaw_;
     int schema_;
+    LogFormat logFormat_ = LogFormat::AUTO;
 };

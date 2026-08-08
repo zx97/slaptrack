@@ -24,11 +24,12 @@
 #include "compressed_io.h"
 #include "embedded.hpp"
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <unistd.h>
 
-#define SLAPTRACK_VERSION "1.2.0"
+#define SLAPTRACK_VERSION "1.3.0"
 
 namespace {
 
@@ -39,6 +40,22 @@ void cleanupTempFile() {
         unlink(g_tempFile.c_str());
         g_tempFile.clear();
     }
+}
+
+// Parse the --log-format argument (see LogFormat in log_parser.h).
+// Returns false and prints an error to stderr for unknown values.
+bool parseLogFormat(const std::string& s, LogFormat& out) {
+    if (s == "auto")                out = LogFormat::AUTO;
+    else if (s == "debug")          out = LogFormat::DEBUG;
+    else if (s == "syslog-utc")     out = LogFormat::SYSLOG_UTC;
+    else if (s == "syslog-local")   out = LogFormat::SYSLOG_LOCALTIME;
+    else if (s == "rfc3339")        out = LogFormat::RFC3339_UTC;
+    else {
+        std::cerr << "Error: unknown log format '" << s << "'\n"
+                  << "Valid values: auto, debug, syslog-utc, syslog-local, rfc3339\n";
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -60,6 +77,8 @@ void printUsage(const char* program) {
     std::cerr << "\n";
     std::cerr << "Options:\n";
     std::cerr << "  -f                   Follow mode (like tail -f)\n";
+    std::cerr << "  --log-format <fmt>   Log format: auto, debug, syslog-utc,\n";
+    std::cerr << "                       syslog-local, rfc3339 (default: auto; -L alias)\n";
     std::cerr << "  -                    Read from stdin (pipe mode)\n";
     std::cerr << "  -D, --documentation  Print full documentation\n";
     std::cerr << "  -l, --licence         Print the GNU AGPL-3.0 license\n";
@@ -107,11 +126,25 @@ void printUsage(const char* program) {
 int main(int argc, char* argv[]) {
     bool followMode = false;
     std::string filename;
+    LogFormat logFormat = LogFormat::AUTO;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-f") {
             followMode = true;
+        } else if (arg == "--log-format" || arg == "-L") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --log-format requires a value.\n";
+                printUsage(argv[0]);
+                return 1;
+            }
+            if (!parseLogFormat(argv[++i], logFormat)) {
+                return 1;
+            }
+        } else if (arg.rfind("--log-format=", 0) == 0) {
+            if (!parseLogFormat(arg.substr(std::strlen("--log-format=")), logFormat)) {
+                return 1;
+            }
         } else if (arg == "-D" || arg == "--documentation") {
             std::cout << embedded::DOCUMENTATION_TEXT;
             return 0;
@@ -143,7 +176,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: -f requires a filename argument, not stdin.\n";
             return 1;
         }
-        FollowTailStdin stdinTail;
+        FollowTailStdin stdinTail(/*schema*/ 0, logFormat);
         stdinTail.run();
         return 0;
     }
@@ -165,10 +198,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (followMode) {
-        FollowTail tail(effectivePath);
+        FollowTail tail(effectivePath, /*schema*/ 0, logFormat);
         tail.run();
     } else {
-        Viewer viewer(effectivePath, followMode);
+        Viewer viewer(effectivePath, followMode, logFormat);
         viewer.run();
     }
 

@@ -19,9 +19,19 @@
     CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+// gmtime_r()/mktime() are POSIX; -std=c++17 (strict ISO) hides them
+// unless a feature-test macro is defined before any system header.
+#define _POSIX_C_SOURCE 200809L
+
 #include "log_parser.h"
 #include <regex>
 #include <algorithm>
+#include <cctype>
+#include <ctime>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cerrno>
 
 Token LogParser::createToken(TokenType type, const std::string& value, size_t start, size_t end) {
     return Token{type, value, start, end};
@@ -29,7 +39,7 @@ Token LogParser::createToken(TokenType type, const std::string& value, size_t st
 
 LogLine LogParser::parseLine(const std::string& line) {
     LogLine logLine;
-    logLine.raw = line;
+    logLine.raw = convertTimestamps(line);
     extractTokens(logLine);
     return logLine;
 }
@@ -213,4 +223,156 @@ void LogParser::extractTokens(LogLine& logLine) {
     std::sort(logLine.tokens.begin(), logLine.tokens.end(), [](const Token& a, const Token& b) {
         return a.start_pos < b.start_pos;
     });
+}
+
+namespace {
+
+// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+long long daysFromCivil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const long long era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long long)doe - 719468;
+}
+
+std::string formatRfc3339Utc(time_t t, const std::string& frac) {
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    char buf[64];
+    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", &tmv);
+    return std::string(buf) + "." + frac + "Z";
+}
+
+} // namespace
+
+// Convert the timestamp prefix according to the configured input format.
+// The returned string is the line that should be tokenized, so offsets
+// computed by extractTokens() stay coherent with the rendered text.
+std::string LogParser::convertTimestamps(const std::string& line) const {
+    switch (format_) {
+        case LogFormat::RFC3339_UTC:
+            return line;
+
+        case LogFormat::DEBUG:
+            return convertDebugHex(line);
+
+        case LogFormat::SYSLOG_UTC:
+            return convertSyslog(line, /*local*/ false);
+
+        case LogFormat::SYSLOG_LOCALTIME:
+            return convertSyslog(line, /*local*/ true);
+
+        case LogFormat::AUTO:
+        default:
+            // Auto-detection: only unambiguous prefixes are converted.
+            // rfc3339 is left untouched; syslog UTC vs localtime cannot be
+            // told apart without a flag, so it is only handled explicitly.
+            if (looksLikeDebugHex(line)) return convertDebugHex(line);
+            return line;
+    }
+}
+
+bool LogParser::looksLikeDebugHex(const std::string& line) const {
+    static const std::regex debug_prefix(R"(^[0-9a-fA-F]+\.[0-9a-fA-F]{5,8}[ \t]+)");
+    std::smatch m;
+    return std::regex_search(line, m, debug_prefix) && m.position(0) == 0;
+}
+
+std::string LogParser::convertDebugHex(const std::string& line) const {
+    static const std::regex debug_prefix(
+        R"(^([0-9a-fA-F]+)\.([0-9a-fA-F]{5,8})[ \t]+)");
+    std::smatch m;
+    if (!std::regex_search(line, m, debug_prefix) || m.position(0) != 0) return line;
+
+    const std::string secStr = m[1].str();
+    const std::string fracStr = m[2].str();
+
+    errno = 0;
+    char* endp = nullptr;
+    const unsigned long sec = strtoul(secStr.c_str(), &endp, 16);
+    if (errno != 0 || endp != secStr.c_str() + secStr.size()) return line;
+
+    errno = 0;
+    const unsigned long long frac = strtoull(fracStr.c_str(), &endp, 16);
+    if (errno != 0 || endp != fracStr.c_str() + fracStr.size()) return line;
+
+    char fracOut[16];
+    if (fracStr.size() <= 5) {
+        // Microseconds (gettimeofday path, `%05x`).
+        snprintf(fracOut, sizeof fracOut, "%06llu", frac);
+    } else {
+        // Nanoseconds (clock_gettime path, `%08x`).
+        snprintf(fracOut, sizeof fracOut, "%09llu", frac);
+    }
+
+    const size_t tsLen = secStr.size() + 1 + fracStr.size();
+
+    size_t pos = tsLen;
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
+    const size_t threadStart = pos;
+    while (pos < line.size() && line[pos] != ' ' && line[pos] != '\t') ++pos;
+    const std::string thread = line.substr(threadStart, pos - threadStart);
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
+    const std::string rest = line.substr(pos);
+
+    std::string out = formatRfc3339Utc((time_t)sec, fracOut);
+    if (!thread.empty()) out += " " + thread;
+    if (!rest.empty()) out += " " + rest;
+    return out;
+}
+
+std::string LogParser::convertSyslog(const std::string& line, bool local) const {
+    static const std::regex syslog_prefix(
+        R"(^([A-Za-z]{3})[ ]+([0-9]{1,2})[ ]+([0-9]{2}):([0-9]{2}):([0-9]{2})[ ]+)");
+    std::smatch m;
+    if (!std::regex_search(line, m, syslog_prefix) || m.position(0) != 0) return line;
+
+    static const char* months[] = {
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec"
+    };
+    const std::string monStr = m[1].str();
+    int mon = -1;
+    for (int i = 0; i < 12; ++i) {
+        if (std::equal(months[i], months[i] + 3, monStr.begin(),
+                       [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); })) {
+            mon = i;
+            break;
+        }
+    }
+    if (mon < 0) return line;
+
+    const int day = atoi(m[2].str().c_str());
+    const int hh = atoi(m[3].str().c_str());
+    const int mm = atoi(m[4].str().c_str());
+    const int ss = atoi(m[5].str().c_str());
+
+    time_t now = time(nullptr);
+    struct tm nowTm;
+    gmtime_r(&now, &nowTm);
+    int year = nowTm.tm_year + 1900;
+    // Syslog has no year; if this month is ahead of now, the log entry is
+    // from the previous year.
+    if (mon > nowTm.tm_mon) --year;
+    if (year < 1970) year = 1970;
+
+    time_t epoch;
+    if (local) {
+        struct tm tmv = {};
+        tmv.tm_year = year - 1900;
+        tmv.tm_mon = mon;
+        tmv.tm_mday = day;
+        tmv.tm_hour = hh;
+        tmv.tm_min = mm;
+        tmv.tm_sec = ss;
+        tmv.tm_isdst = -1;
+        epoch = mktime(&tmv);
+    } else {
+        epoch = daysFromCivil(year, mon + 1, day) * 86400 + hh * 3600 + mm * 60 + ss;
+    }
+
+    const size_t tsLen = m.length(0);
+    return formatRfc3339Utc(epoch, "000000000") + " " + line.substr(tsLen);
 }

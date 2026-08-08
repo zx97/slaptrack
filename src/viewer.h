@@ -32,7 +32,8 @@
 
 class Viewer {
 public:
-    Viewer(const std::string& filename, bool followMode = false);
+    Viewer(const std::string& filename, bool followMode = false,
+           LogFormat logFormat = LogFormat::AUTO);
     ~Viewer();
     
     void run();
@@ -99,6 +100,7 @@ private:
     
     std::string filename_;
     bool followMode_;
+    LogFormat logFormat_ = LogFormat::AUTO;
     LogBuffer buffer_;
     std::vector<size_t> visibleIndices_;
     FilterStack filterStack_;

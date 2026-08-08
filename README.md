@@ -27,12 +27,18 @@ make clean && make
 ## Usage
 
 ```bash
-./build/slaptrack [-f] <logfile>
+./build/slaptrack [-f] [--log-format <fmt>] <logfile>
 ```
 
 ### Options
 
 - `-f` - Follow mode (like `tail -f`), automatically shows new lines as they're written
+- `--log-format <fmt>` - Input log format: `auto`, `debug`, `syslog-utc`, `syslog-local`, `rfc3339` (default: `auto`)
+  - `auto` - Per-line detection: decodes the debug hex epoch prefix, leaves everything else untouched
+  - `debug` - OpenLDAP debug/access log: `<sec>.<frac> <thread-id> ...` (hex epoch) decoded to RFC3339 UTC
+  - `syslog-utc` - `%b %d %H:%M:%S` syslog timestamps decoded as UTC
+  - `syslog-local` - same, but decoded as local time
+  - `rfc3339` - no conversion (the default for existing logs)
 
 ### Examples
 
@@ -42,6 +48,12 @@ make clean && make
 
 # Follow a log file in real-time
 ./build/slaptrack -f logs/slapd_2.6.log
+
+# Decode an epoch-prefixed debug log (olcLogFileFormat debug output)
+./build/slaptrack --log-format debug logs/slapd_debug.log
+
+# Decode syslog-format access log as UTC on stdin
+tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 ```
 
 ## Controls

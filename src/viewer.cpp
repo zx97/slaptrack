@@ -41,8 +41,8 @@ static void signalHandler(int /*sig*/) {
     }
 }
 
-Viewer::Viewer(const std::string& filename, bool followMode) 
-    : filename_(filename), followMode_(followMode),
+Viewer::Viewer(const std::string& filename, bool followMode, LogFormat logFormat)
+    : filename_(filename), followMode_(followMode), logFormat_(logFormat),
       mainWindow_(nullptr), filterWindow_(nullptr), statusWindow_(nullptr), popupWindow_(nullptr),
       scrollOffset_(0), cursorRow_(0), cursorCol_(0),
       termWidth_(80), termHeight_(24), running_(true), 
@@ -56,7 +56,8 @@ Viewer::Viewer(const std::string& filename, bool followMode)
       currentSchema_(0), autoColor_(false) {
     
     g_viewer = this;
-    
+
+    buffer_.getParser().setLogFormat(logFormat_);
     if (!buffer_.loadFile(filename)) {
         std::cerr << "Error: Failed to load " << filename << std::endl;
         return;
