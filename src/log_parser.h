@@ -74,8 +74,6 @@ public:
     
     LogLine parseLine(const std::string& line);
     
-    static std::vector<LogLine> parseFile(const std::string& filename);
-    
 private:
     void extractTokens(LogLine& logLine);
     Token createToken(TokenType type, const std::string& value, size_t start, size_t end);

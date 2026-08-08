@@ -20,9 +20,7 @@
 */
 
 #include "log_parser.h"
-#include <fstream>
 #include <regex>
-#include <iostream>
 #include <algorithm>
 
 Token LogParser::createToken(TokenType type, const std::string& value, size_t start, size_t end) {
@@ -215,22 +213,4 @@ void LogParser::extractTokens(LogLine& logLine) {
     std::sort(logLine.tokens.begin(), logLine.tokens.end(), [](const Token& a, const Token& b) {
         return a.start_pos < b.start_pos;
     });
-}
-
-std::vector<LogLine> LogParser::parseFile(const std::string& filename) {
-    std::vector<LogLine> lines;
-    std::ifstream file(filename);
-    
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        return lines;
-    }
-    
-    LogParser parser;
-    std::string line;
-    while (std::getline(file, line)) {
-        lines.push_back(parser.parseLine(line));
-    }
-    
-    return lines;
 }

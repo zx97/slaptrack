@@ -125,13 +125,3 @@ size_t FilterStack::getRangeEnd() const {
     }
     return end;
 }
-
-std::vector<const LogLine*> FilterStack::apply(const std::vector<LogLine>& lines) const {
-    std::vector<const LogLine*> result;
-    for (const auto& line : lines) {
-        if (matches(line)) {
-            result.push_back(&line);
-        }
-    }
-    return result;
-}

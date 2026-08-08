@@ -24,7 +24,6 @@
 #include "log_parser.h"
 #include <string>
 #include <vector>
-#include <functional>
 #include <cstdint>
 
 enum class FilterType {
@@ -79,7 +78,6 @@ public:
     bool matches(const LogLine& line) const;
     bool matches(const LogLine& line, size_t lineIndex) const;
     bool candidateInRaw(const std::string& rawLine) const;
-    std::vector<const LogLine*> apply(const std::vector<LogLine>& lines) const;
     
     bool hasConnRange() const;
     size_t getRangeStart() const;
