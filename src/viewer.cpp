@@ -110,7 +110,7 @@ void Viewer::initTerminal() {
     raw();
     noecho();
     keypad(stdscr, TRUE);
-    curs_set(0);
+    curs_set(1);
     start_color();
     use_default_colors();
 
@@ -860,10 +860,10 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
     }
 
     if (isCurrentToken) {
-        // The whole cursor line is drawn with A_REVERSE; drop it over
-        // the token so the selected word pops in its real colours on
-        // the full token width instead of a 1-char block cursor.
-        wattroff(mainWindow_, A_REVERSE);
+        // The token under the cursor stands out from the other
+        // highlight tokens (which are drawn with A_REVERSE + their
+        // colour pair) by adding an underline; it keeps its colour
+        // pair so the whole block stays lit.
         wattron(mainWindow_, A_UNDERLINE);
     } else if (isHovered) {
         wattron(mainWindow_, A_REVERSE);
