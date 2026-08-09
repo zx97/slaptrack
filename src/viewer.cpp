@@ -1473,11 +1473,38 @@ void Viewer::activateFilter() {
             filter.key = "dn";
             filter.value = token->value.substr(4, token->value.length() - 5);
             break;
-        case TokenType::OP_ID:
+        case TokenType::OP_ID: {
             filter.type = FilterType::OP;
             filter.key = "op";
             filter.value = token->value.substr(3);
+
+            // An op is meaningless without its conn — the same op
+            // number can appear in unrelated connections.  Auto-add
+            // the conn= filter of the current line so the result is
+            // just this op in this connection.
+            if (cursorRow_ >= 0
+                && cursorRow_ < (int)visibleIndices_.size()) {
+                auto line = buffer_.getLine(
+                    visibleIndices_[cursorRow_]);
+                if (line && line->conn_id) {
+                    Filter connFilter;
+                    connFilter.type = FilterType::CONN;
+                    connFilter.key = "conn";
+                    connFilter.value = *line->conn_id;
+                    size_t currentLine =
+                        visibleIndices_[cursorRow_];
+                    size_t connStart = findConnectionStart(
+                        currentLine, connFilter.value);
+                    size_t connEnd = findConnectionEnd(
+                        currentLine, connFilter.value);
+                    connFilter.rangeStart = connStart;
+                    connFilter.rangeEnd = connEnd;
+                    connFilter.hasRange = true;
+                    filterStack_.push(connFilter);
+                }
+            }
             break;
+        }
         case TokenType::THREAD_ID:
             filter.type = FilterType::THREAD;
             filter.key = "thread";
