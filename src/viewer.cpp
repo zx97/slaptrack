@@ -628,7 +628,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
     wmove(mainWindow_, row, 0);
     wclrtoeol(mainWindow_);
 
-    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+    wattrset(mainWindow_, COLOR_PAIR(16));
 
     int col = 0;
 
@@ -672,7 +672,7 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
                 if (screenCol + len > termWidth_) {
                     len = termWidth_ - screenCol;
                 }
-                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                wattrset(mainWindow_, COLOR_PAIR(16));
                 mvwprintw(mainWindow_, row, screenCol, "%s",
                           line.raw.substr(offsetInLine, len).c_str());
             }
@@ -711,20 +711,17 @@ void Viewer::printTruncatedLine(const LogLine& line, size_t lineNum, int row, bo
                 len = termWidth_ - screenCol;
             }
             if (len > 0) {
-                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                wattrset(mainWindow_, COLOR_PAIR(16));
                 mvwprintw(mainWindow_, row, screenCol, "%s",
                           line.raw.substr(lastEnd, len).c_str());
             }
         }
     }
 
-    if (isHighlighted) {
-        int screenCol = col + (adjEnd - adjStart);
-        for (int c = screenCol; c < termWidth_; c++) {
-            mvwaddch(mainWindow_, row, c, ' ');
-        }
-        wattroff(mainWindow_, A_REVERSE);
-    }
+    // Nothing to fill here: the cursor line is no longer drawn in
+    // full reverse video — only the token under the cursor is lit.
+    // Leaving this empty on purpose so the rest of the cursor line
+    // keeps its normal colouring.
 }
 
 void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow, bool isHighlighted) {
@@ -737,24 +734,9 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
         contentWidth -= numWidth;
     }
     
-    if (isHighlighted) {
-        int rows = calculateLineScreenRows(line);
-        for (int r = 0; r < rows && startRow + r < termHeight_ - 2; r++) {
-            wmove(mainWindow_, startRow + r, 0);
-            wattron(mainWindow_, A_REVERSE);
-            for (int c = 0; c < termWidth_; c++) {
-                waddch(mainWindow_, ' ');
-            }
-            wattroff(mainWindow_, A_REVERSE);
-        }
-    }
-    
-    // The wrap renderer works on the same token stream as the
-    // truncated renderer, so the theme colours are preserved line by
-    // line.  The cursor row keeps its A_REVERSE tint.
     int col = 0;
     int row = startRow;
-    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+    wattrset(mainWindow_, COLOR_PAIR(16));
     
     if (showLineNumbers_ && row < termHeight_ - 2) {
         size_t totalLines = buffer_.getTotalLines();
@@ -777,14 +759,14 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
 
         if (token.start_pos > lastEnd) {
             std::string plainText = line.raw.substr(lastEnd, token.start_pos - lastEnd);
-            wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+            wattrset(mainWindow_, COLOR_PAIR(16));
             size_t pos = 0;
             while (pos < plainText.length() && row < termHeight_ - 2) {
                 int spaceLeft = contentWidth - (col - numWidth);
                 if (spaceLeft <= 0) {
                     row++;
                     col = numWidth;
-                    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                    wattrset(mainWindow_, COLOR_PAIR(16));
                 }
                 size_t chunkLen = std::min((size_t)spaceLeft, plainText.length() - pos);
                 mvwprintw(mainWindow_, row, col, "%s", plainText.substr(pos, chunkLen).c_str());
@@ -806,7 +788,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
             if (spaceLeft <= 0) {
                 row++;
                 col = numWidth;
-                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                wattrset(mainWindow_, COLOR_PAIR(16));
             }
             size_t chunkLen = std::min((size_t)spaceLeft, val.length() - pos);
             mvwprintw(mainWindow_, row, col, "%s", val.substr(pos, chunkLen).c_str());
@@ -819,14 +801,14 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
 
     if (lastEnd < line.raw.length() && row < termHeight_ - 2) {
         std::string remaining = line.raw.substr(lastEnd);
-        wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+        wattrset(mainWindow_, COLOR_PAIR(16));
         size_t pos = 0;
         while (pos < remaining.length() && row < termHeight_ - 2) {
             int spaceLeft = contentWidth - (col - numWidth);
             if (spaceLeft <= 0) {
                 row++;
                 col = numWidth;
-                wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+                wattrset(mainWindow_, COLOR_PAIR(16));
             }
             size_t chunkLen = std::min((size_t)spaceLeft, remaining.length() - pos);
             mvwprintw(mainWindow_, row, col, "%s", remaining.substr(pos, chunkLen).c_str());
@@ -839,7 +821,7 @@ void Viewer::printWrappedLine(const LogLine& line, size_t lineNum, int startRow,
     // (possibly by another code path) doesn't inherit e.g. a leftover
     // A_BOLD or COLOR_PAIR from the last token — that's the colour
     // "bleed" across lines.
-    wattrset(mainWindow_, (isHighlighted ? A_REVERSE : 0) | COLOR_PAIR(16));
+    wattrset(mainWindow_, COLOR_PAIR(16));
     wattroff(mainWindow_, A_BOLD);
     wattroff(mainWindow_, A_UNDERLINE);
 }
@@ -860,10 +842,11 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
     }
 
     if (isCurrentToken) {
-        // The token under the cursor stands out from the other
-        // highlight tokens (which are drawn with A_REVERSE + their
-        // colour pair) by adding an underline; it keeps its colour
-        // pair so the whole block stays lit.
+        // Lit the whole token (A_REVERSE + its colour pair), not the
+        // whole cursor line: the block the cursor moves over is the
+        // selection the user tracks, so it is the only thing in
+        // reverse video.
+        wattron(mainWindow_, A_REVERSE);
         wattron(mainWindow_, A_UNDERLINE);
     } else if (isHovered) {
         wattron(mainWindow_, A_REVERSE);
@@ -1469,15 +1452,25 @@ void Viewer::activateFilter() {
             filter.hasRange = true;
             break;
         }
-        case TokenType::DN_VALUE:
-            filter.type = FilterType::DN;
-            filter.key = "dn";
-            filter.value = token->value.substr(4, token->value.length() - 5);
-            // A dn alone spans every connection that touches it; anchor
-            // it to the current conn so the result is just this DN in
-            // this connection.
-            addConnFilterForCurrentLine();
+        case TokenType::DN_VALUE: {
+            // A DN is usually shared by every line of one connection
+            // (bind + the operations it runs), so showing "everything
+            // with this dn" is the whole log again.  Show the
+            // connection of the clicked line instead — one row is
+            // enough to know which connection the user meant.
+            size_t currentLine = visibleIndices_[cursorRow_];
+            auto line = buffer_.getLine(currentLine);
+            if (!line || !line->conn_id) return;
+            filter.type = FilterType::CONN;
+            filter.key = "conn";
+            filter.value = *line->conn_id;
+            size_t connStart = findConnectionStart(currentLine, filter.value);
+            size_t connEnd = findConnectionEnd(currentLine, filter.value);
+            filter.rangeStart = connStart;
+            filter.rangeEnd = connEnd;
+            filter.hasRange = true;
             break;
+        }
         case TokenType::OP_ID:
             filter.type = FilterType::OP;
             filter.key = "op";
@@ -1577,7 +1570,10 @@ void Viewer::activateFilterAtPosition(int row, int col) {
 void Viewer::deactivateFilter() {
     if (filterStack_.empty()) return;
     
-    filterStack_.pop();
+    // One Esc/Backspace clears the whole filter chain: the user is
+    // usually not trying to unwind one auto-added conn= at a time,
+    // they want the filtered view gone.
+    filterStack_.clear();
     
     buildFilteredIndices();
     
@@ -1881,58 +1877,43 @@ std::vector<size_t> Viewer::scanLines(size_t scanStart, size_t scanEnd, bool& ca
 }
 
 size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {
-    // Bound the backward walk: a huge file with no ACCEPT/closed
-    // markers (or a connection spanning the whole file) must not turn
-    // this O(n) parse-every-line loop into a multi-second UI freeze.
+    // Walk back to the first line carrying this conn id, bounded so a
+    // huge file (or a connection with no ACCEPT/closed markers) can't
+    // turn this loop into a multi-second UI freeze.  Cheap raw-line
+    // substring test — no full LogLine parse per line.
+    const std::string needle = "conn=" + connId;
     const size_t MAX_BACK = 20000;
     size_t stop = fromLine > MAX_BACK ? fromLine - MAX_BACK : 0;
 
     for (size_t i = fromLine; i > stop; i--) {
         size_t lineIdx = i - 1;
-        auto line = buffer_.getLine(lineIdx);
-        if (!line) continue;
-        
-        if (line->conn_id && line->conn_id.value() == connId) {
-            if (line->raw.find("ACCEPT") != std::string::npos) {
-                return lineIdx;
-            }
-            if (line->raw.find("closed") != std::string::npos) {
-                return i;
-            }
+        auto raw = buffer_.getRawLine(lineIdx);
+        if (raw && raw->find(needle) != std::string::npos) {
+            return lineIdx;
         }
     }
-    
-    auto line = buffer_.getLine(0);
-    if (line && line->conn_id && line->conn_id.value() == connId) {
-        if (line->raw.find("ACCEPT") != std::string::npos) {
-            return 0;
-        }
-    }
-    
     return fromLine;
 }
 
 size_t Viewer::findConnectionEnd(size_t fromLine, const std::string& connId) {
     size_t totalLines = buffer_.getTotalLines();
-    
-    // Bound the forward walk (see findConnectionStart).
-    const size_t kMaxFwd = 20000;
-    size_t stop = fromLine + kMaxFwd < totalLines
-                      ? fromLine + kMaxFwd
-                      : totalLines;
 
+    // Walk forward to the last line carrying this conn_id, bounded
+    // (see findConnectionStart).  Never fall back to the end of the
+    // file: that would turn the range into "whole file" and the
+    // filter rebuild into a full log scan.
+    const std::string needle = "conn=" + connId;
+    const size_t kMaxFwd = 20000;
+    size_t stop = fromLine + kMaxFwd < totalLines ? fromLine + kMaxFwd : totalLines;
+
+    size_t last = fromLine;
     for (size_t i = fromLine; i < stop; i++) {
-        auto line = buffer_.getLine(i);
-        if (!line) continue;
-        
-        if (line->conn_id && line->conn_id.value() == connId) {
-            if (line->raw.find("closed") != std::string::npos) {
-                return i;
-            }
+        auto raw = buffer_.getRawLine(i);
+        if (raw && raw->find(needle) != std::string::npos) {
+            last = i;
         }
     }
-    
-    return totalLines - 1;
+    return last;
 }
 
 void Viewer::buildFilteredIndices() {
