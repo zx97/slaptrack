@@ -1639,14 +1639,67 @@ void Viewer::performSearch(const std::string& query) {
     searchQuery_ = query;
     searchResults_.clear();
     currentSearchResult_ = 0;
-    
-    for (size_t i = 0; i < visibleIndices_.size(); i++) {
-        auto line = buffer_.getLine(visibleIndices_[i]);
-        if (line && line->raw.find(query) != std::string::npos) {
+
+    const size_t total = visibleIndices_.size();
+    if (total == 0) return;
+
+    showPopup("Searching... (Esc to cancel)", 0.0f);
+    touchwin(mainWindow_);
+    wnoutrefresh(mainWindow_);
+    touchwin(filterWindow_);
+    wnoutrefresh(filterWindow_);
+    touchwin(statusWindow_);
+    wnoutrefresh(statusWindow_);
+    doupdate();
+
+    nodelay(stdscr, TRUE);
+
+    bool cancelled = false;
+    auto lastUpdate = std::chrono::steady_clock::now();
+    int lastPct = -1;
+
+    for (size_t i = 0; i < total; i++) {
+        if ((i & 0x3FF) == 0) {
+            int ch = getch();
+            if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+                cancelled = true;
+                break;
+            }
+            if (ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
+                cancelled = true;
+                break;
+            }
+            auto now = std::chrono::steady_clock::now();
+            if (now - lastUpdate >= std::chrono::milliseconds(100)) {
+                int pct = (int)(((double)i * 100.0) / (double)total);
+                if (pct != lastPct) {
+                    lastPct = pct;
+                    popupMessage_ = "Searching... " + std::to_string(pct) + "%";
+                    popupProgress_ = pct / 100.0f;
+                    drawPopup();
+                }
+                lastUpdate = now;
+            }
+        }
+        std::optional<std::string> raw = buffer_.getRawLine(visibleIndices_[i]);
+        if (raw && raw->find(query) != std::string::npos) {
             searchResults_.push_back(i);
         }
     }
-    
+
+    nodelay(stdscr, FALSE);
+    timeout(10);
+
+    if (cancelled) {
+        hidePopup();
+        return;
+    }
+
+    int pct = 100;
+    popupMessage_ = "Searching... done (" + std::to_string(searchResults_.size()) + ")";
+    popupProgress_ = 1.0f;
+    drawPopup();
+
     if (!searchResults_.empty()) {
         cursorRow_ = searchResults_[0];
         scrollOffset_ = std::max(0, (int)cursorRow_ - (termHeight_ / 2));
