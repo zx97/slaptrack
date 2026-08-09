@@ -110,7 +110,7 @@ void Viewer::initTerminal() {
     raw();
     noecho();
     keypad(stdscr, TRUE);
-    curs_set(1);
+    curs_set(0);
     start_color();
     use_default_colors();
 
@@ -860,9 +860,10 @@ void Viewer::printToken(const Token& token, bool isCurrentToken, bool isHovered)
     }
 
     if (isCurrentToken) {
-        // Underline the token under the cursor so the user can see
-        // exactly which block of text the cursor "englobes" and will
-        // be filtered by Enter.
+        // The whole cursor line is drawn with A_REVERSE; drop it over
+        // the token so the selected word pops in its real colours on
+        // the full token width instead of a 1-char block cursor.
+        wattroff(mainWindow_, A_REVERSE);
         wattron(mainWindow_, A_UNDERLINE);
     } else if (isHovered) {
         wattron(mainWindow_, A_REVERSE);
@@ -1472,39 +1473,19 @@ void Viewer::activateFilter() {
             filter.type = FilterType::DN;
             filter.key = "dn";
             filter.value = token->value.substr(4, token->value.length() - 5);
+            // A dn alone spans every connection that touches it; anchor
+            // it to the current conn so the result is just this DN in
+            // this connection.
+            addConnFilterForCurrentLine();
             break;
-        case TokenType::OP_ID: {
+        case TokenType::OP_ID:
             filter.type = FilterType::OP;
             filter.key = "op";
             filter.value = token->value.substr(3);
-
             // An op is meaningless without its conn — the same op
-            // number can appear in unrelated connections.  Auto-add
-            // the conn= filter of the current line so the result is
-            // just this op in this connection.
-            if (cursorRow_ >= 0
-                && cursorRow_ < (int)visibleIndices_.size()) {
-                auto line = buffer_.getLine(
-                    visibleIndices_[cursorRow_]);
-                if (line && line->conn_id) {
-                    Filter connFilter;
-                    connFilter.type = FilterType::CONN;
-                    connFilter.key = "conn";
-                    connFilter.value = *line->conn_id;
-                    size_t currentLine =
-                        visibleIndices_[cursorRow_];
-                    size_t connStart = findConnectionStart(
-                        currentLine, connFilter.value);
-                    size_t connEnd = findConnectionEnd(
-                        currentLine, connFilter.value);
-                    connFilter.rangeStart = connStart;
-                    connFilter.rangeEnd = connEnd;
-                    connFilter.hasRange = true;
-                    filterStack_.push(connFilter);
-                }
-            }
+            // number can appear in unrelated connections.
+            addConnFilterForCurrentLine();
             break;
-        }
         case TokenType::THREAD_ID:
             filter.type = FilterType::THREAD;
             filter.key = "thread";
@@ -1562,6 +1543,29 @@ void Viewer::activateFilter() {
     cursorCol_ = 0;
     searchResults_.clear();
     fullRedraw();
+}
+
+void Viewer::addConnFilterForCurrentLine() {
+    if (cursorRow_ < 0
+        || cursorRow_ >= (int)visibleIndices_.size()) {
+        return;
+    }
+    auto line = buffer_.getLine(visibleIndices_[cursorRow_]);
+    if (!line || !line->conn_id) return;
+
+    // Push a plain conn= filter: no range.  Computing a range would
+    // call findConnectionStart()/findConnectionEnd(), which walk O(n)
+    // lines parsing each one until they find ACCEPT/closed markers —
+    // that freezes the UI for seconds on files where the connection,
+    // had no such markers (or where it spans the whole file).  The
+    // plain filter reuses the cheap conn= substring candidate test in
+    // scanLines, so the rebuild is fast and the "Filtering..."
+    // popup shows.
+    Filter connFilter;
+    connFilter.type = FilterType::CONN;
+    connFilter.key = "conn";
+    connFilter.value = *line->conn_id;
+    filterStack_.push(connFilter);
 }
 
 void Viewer::activateFilterAtPosition(int row, int col) {
@@ -1695,7 +1699,6 @@ void Viewer::performSearch(const std::string& query) {
         return;
     }
 
-    int pct = 100;
     popupMessage_ = "Searching... done (" + std::to_string(searchResults_.size()) + ")";
     popupProgress_ = 1.0f;
     drawPopup();
@@ -1878,7 +1881,13 @@ std::vector<size_t> Viewer::scanLines(size_t scanStart, size_t scanEnd, bool& ca
 }
 
 size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {
-    for (size_t i = fromLine; i > 0; i--) {
+    // Bound the backward walk: a huge file with no ACCEPT/closed
+    // markers (or a connection spanning the whole file) must not turn
+    // this O(n) parse-every-line loop into a multi-second UI freeze.
+    const size_t MAX_BACK = 20000;
+    size_t stop = fromLine > MAX_BACK ? fromLine - MAX_BACK : 0;
+
+    for (size_t i = fromLine; i > stop; i--) {
         size_t lineIdx = i - 1;
         auto line = buffer_.getLine(lineIdx);
         if (!line) continue;
@@ -1906,7 +1915,13 @@ size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {
 size_t Viewer::findConnectionEnd(size_t fromLine, const std::string& connId) {
     size_t totalLines = buffer_.getTotalLines();
     
-    for (size_t i = fromLine; i < totalLines; i++) {
+    // Bound the forward walk (see findConnectionStart).
+    const size_t kMaxFwd = 20000;
+    size_t stop = fromLine + kMaxFwd < totalLines
+                      ? fromLine + kMaxFwd
+                      : totalLines;
+
+    for (size_t i = fromLine; i < stop; i++) {
         auto line = buffer_.getLine(i);
         if (!line) continue;
         

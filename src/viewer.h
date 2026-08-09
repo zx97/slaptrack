@@ -91,6 +91,7 @@ private:
     void activateFilter();
     void activateFilterAtPosition(int row, int col);
     void deactivateFilter();
+    void addConnFilterForCurrentLine();
     
     void startSearch();
     void performSearch(const std::string& query);
