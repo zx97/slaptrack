@@ -13,6 +13,7 @@ src/version.h
 
 # === Session transcripts & scratch ===
 session-*.md
+session_*.md
 
 # === Tooling / agent artifacts (not source) ===
 .omo/

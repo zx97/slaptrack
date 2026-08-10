@@ -160,6 +160,11 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 - **Memory**: ~25MB vs loading entire file into memory
 - **Scrolling**: Instant, lines parsed on-demand
 - **Follow mode**: Uses inotify for efficient file monitoring
+- **Connection filtering**: Single `conn=` filter on an empty filter
+  stack takes the fast path — it range-scans the raw lines around the
+  cursor with grouped disk reads (no full-file regex parse), so a
+  filter on a 1.37M-line log applies in ~0.5s instead of seconds.
+  Chained filters still go through the full filtered-index rebuild.
 
 ## Requirements
 
