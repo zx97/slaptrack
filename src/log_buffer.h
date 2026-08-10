@@ -48,6 +48,12 @@ public:
     // if the index is out of range.
     std::optional<std::string> getRawLine(size_t index) const;
     
+    // Bulk raw-line read: returns up to `count` raw lines starting at
+    // `startLine` with a single grouped disk seek/read, without
+    // disturbing the paged raw window.  Used by range scans that walk
+    // an arc of the file sequentially (connection range finding).
+    std::vector<std::string> getRawLines(size_t startLine, size_t count) const;
+    
     // Expose the parser so the filter loop can parse raw lines
     // without going through the (LRU-bounded) parsed-line cache.
     LogParser& getParser() { return parser_; }

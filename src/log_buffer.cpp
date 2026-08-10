@@ -128,6 +128,30 @@ std::optional<std::string> LogBuffer::getRawLine(size_t index) const {
     return rawLines_[offset];
 }
 
+std::vector<std::string> LogBuffer::getRawLines(size_t startLine, size_t count) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const size_t total = index_.getTotalLines();
+    if (startLine >= total) {
+        return {};
+    }
+    const size_t n = std::min(count, total - startLine);
+    std::vector<std::string> out;
+    out.reserve(n);
+    std::ifstream f(index_.getFilename(), std::ios::binary);
+    if (!f.is_open()) {
+        return out;
+    }
+    f.seekg(index_.getLineOffset(startLine));
+    std::string line;
+    while (out.size() < n && std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+
 std::optional<LogLine> LogBuffer::getLine(size_t index) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (index >= index_.getTotalLines()) {
