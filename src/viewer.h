@@ -99,10 +99,24 @@ private:
     void prevSearchResult();
     
     void buildFilteredIndices();
+    // Called after visibleIndices_ is fresh: recalculates screen rows,
+    // holds the "Filtering... done" popup for MIN_POPUP_MS, then hides
+    // it.  Shared by buildFilteredIndices() and the single-conn fast
+    // path so the acknowledgement is identical in both.
+    void finishFilterUpdate();
     bool linePassesFilters(size_t lineIndex);
     std::vector<size_t> scanLines(size_t scanStart, size_t scanEnd, bool& cancelled);
-    size_t findConnectionStart(size_t fromLine, const std::string& connId);
-    size_t findConnectionEnd(size_t fromLine, const std::string& connId);
+    // Scans backward then forward from `fromLine` to find the exact
+    // lowest/highest line indices carrying conn=<connId> on the raw
+    // line.  Returns false if the user cancelled (Esc/Ctrl-C) during
+    // the scan.  Popup with progress + cancel is shown immediately.
+    // When `outMatches` is non-null, every line whose conn id equals
+    // `connId` (same test as Filter::matches, no full parse) is
+    // appended in ascending order, so the caller can build the
+    // filtered view without a second pass over the file.
+    bool findConnRange(size_t fromLine, const std::string& connId,
+                       size_t& connStart, size_t& connEnd,
+                       std::vector<size_t>* outMatches = nullptr);
     
     void showPopup(const std::string& message, float progress);
     void hidePopup();

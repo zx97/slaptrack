@@ -41,6 +41,33 @@ static void signalHandler(int /*sig*/) {
     }
 }
 
+// Same match semantics as the CONN filter and the parser's
+// conn=(\d+) capture: the conn id must appear as the final run of
+// digits after a "conn=" marker, and it must equal `connId`.  This
+// lets a range scan collect matching lines in one cheap pass without
+// running the full (~20 regex) tokenizer.
+static bool rawHasExactConn(const std::string& raw, const std::string& connId) {
+    const std::string marker = "conn=";
+    size_t pos = 0;
+    size_t dStart = std::string::npos;
+    size_t dLen = 0;
+    bool any = false;
+    while ((pos = raw.find(marker, pos)) != std::string::npos) {
+        pos += marker.size();
+        size_t s = pos;
+        while (pos < raw.size() && raw[pos] >= '0' && raw[pos] <= '9') {
+            pos++;
+        }
+        if (pos > s) {
+            any = true;
+            dStart = s;
+            dLen = pos - s;
+        }
+    }
+    return any && dLen == connId.size()
+        && raw.compare(dStart, dLen, connId) == 0;
+}
+
 Viewer::Viewer(const std::string& filename, bool followMode, LogFormat logFormat)
     : filename_(filename), followMode_(followMode), logFormat_(logFormat),
       mainWindow_(nullptr), filterWindow_(nullptr), statusWindow_(nullptr), popupWindow_(nullptr),
@@ -1436,6 +1463,8 @@ void Viewer::activateFilter() {
     if (!token.has_value()) return;
     
     Filter filter;
+    std::vector<size_t> connMatches;
+    bool connFastPath = false;
 
     switch (token->type) {
         case TokenType::CONN_ID: {
@@ -1444,12 +1473,20 @@ void Viewer::activateFilter() {
             filter.value = token->value.substr(5);
 
             size_t currentLine = visibleIndices_[cursorRow_];
-            size_t connStart = findConnectionStart(currentLine, filter.value);
-            size_t connEnd = findConnectionEnd(currentLine, filter.value);
+            size_t connStart = 0, connEnd = 0;
+            if (!findConnRange(currentLine, filter.value, connStart, connEnd, &connMatches)) {
+                hidePopup();
+                return;
+            }
 
             filter.rangeStart = connStart;
             filter.rangeEnd = connEnd;
             filter.hasRange = true;
+            // The single CONN filter is the most common click target.
+            // findConnRange already collected every matching line index
+            // while it scanned, so the view can be built from those
+            // directly, skipping the second full pass over the range.
+            connFastPath = filterStack_.empty() && !connMatches.empty();
             break;
         }
         case TokenType::DN_VALUE: {
@@ -1458,17 +1495,21 @@ void Viewer::activateFilter() {
             // with this dn" is the whole log again.  Show the
             // connection of the clicked line instead — one row is
             // enough to know which connection the user meant.
-            size_t currentLine = visibleIndices_[cursorRow_];
+            const size_t currentLine = visibleIndices_[cursorRow_];
             auto line = buffer_.getLine(currentLine);
             if (!line || !line->conn_id) return;
             filter.type = FilterType::CONN;
             filter.key = "conn";
             filter.value = *line->conn_id;
-            size_t connStart = findConnectionStart(currentLine, filter.value);
-            size_t connEnd = findConnectionEnd(currentLine, filter.value);
+            size_t connStart = 0, connEnd = 0;
+            if (!findConnRange(currentLine, filter.value, connStart, connEnd, &connMatches)) {
+                hidePopup();
+                return;
+            }
             filter.rangeStart = connStart;
             filter.rangeEnd = connEnd;
             filter.hasRange = true;
+            connFastPath = filterStack_.empty() && !connMatches.empty();
             break;
         }
         case TokenType::OP_ID:
@@ -1528,8 +1569,20 @@ void Viewer::activateFilter() {
     }
     
     filterStack_.push(filter);
-    
-    buildFilteredIndices();
+
+    if (connFastPath) {
+        // findConnRange already collected every matching index while
+        // it scanned, so there is no second pass.  Mirror the state
+        // buildFilteredIndices sets up so finishFilterUpdate's popup
+        // acknowledgement is identical in both paths.
+        filtering_ = true;
+        g_interrupted = 0;
+        filterStart_ = std::chrono::steady_clock::now();
+        visibleIndices_ = std::move(connMatches);
+        finishFilterUpdate();
+    } else {
+        buildFilteredIndices();
+    }
     
     scrollOffset_ = 0;
     cursorRow_ = 0;
@@ -1547,13 +1600,10 @@ void Viewer::addConnFilterForCurrentLine() {
     if (!line || !line->conn_id) return;
 
     // Push a plain conn= filter: no range.  Computing a range would
-    // call findConnectionStart()/findConnectionEnd(), which walk O(n)
-    // lines parsing each one until they find ACCEPT/closed markers —
-    // that freezes the UI for seconds on files where the connection,
-    // had no such markers (or where it spans the whole file).  The
-    // plain filter reuses the cheap conn= substring candidate test in
-    // scanLines, so the rebuild is fast and the "Filtering..."
-    // popup shows.
+    // trigger a sequential scan of the file (which may be huge for a
+    // long-lived connection) before the rebuild; the plain filter
+    // reuses the cheap conn= substring candidate test in scanLines,
+    // so the rebuild is fast and the "Filtering..." popup shows.
     Filter connFilter;
     connFilter.type = FilterType::CONN;
     connFilter.key = "conn";
@@ -1863,57 +1913,196 @@ std::vector<size_t> Viewer::scanLines(size_t scanStart, size_t scanEnd, bool& ca
     result.reserve(scanEnd >= scanStart ? scanEnd - scanStart + 1 : 0);
     LogParser& parser = buffer_.getParser();
     cancelled = false;
-    for (size_t i = scanStart; i <= scanEnd; i++) {
-        if (g_interrupted) { cancelled = true; break; }
-        std::optional<std::string> raw = buffer_.getRawLine(i);
-        if (!raw) continue;
-        if (!filterStack_.candidateInRaw(*raw)) continue;
-        LogLine line = parser.parseLine(*raw);
-        if (filterStack_.matches(line, i)) {
-            result.push_back(i);
+
+    // Read in 4096-line blocks via one grouped disk read each.  Walking
+    // a raw line one by one through getRawLine() reloads a fresh
+    // 4096-line page from disk at every window boundary — quadratic
+    // disk I/O on long ranges, freezing the UI for seconds.  Block
+    // reads also let us poll for Esc between blocks so a long filter
+    // stays cancellable with live progress.
+    constexpr size_t kScanBlock = 4096;
+    const auto startTime = std::chrono::steady_clock::now();
+    auto lastUpdate = startTime;
+    int lastPct = -1;
+
+    auto reportProgress = [&](size_t absLine) {
+        if (scanEnd <= scanStart) return;
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastUpdate < std::chrono::milliseconds(100)) return;
+        lastUpdate = now;
+        int pct = (int)(((double)(absLine - scanStart) * 100.0)
+                        / (double)(scanEnd - scanStart));
+        if (pct != lastPct) {
+            lastPct = pct;
+            popupMessage_ = "Filtering... " + std::to_string(pct) + "%";
+            popupProgress_ = pct / 100.0f;
+            drawPopup();
         }
+    };
+
+    for (size_t blockLo = scanStart; blockLo <= scanEnd; blockLo += kScanBlock) {
+        size_t blockHi = std::min(blockLo + kScanBlock, scanEnd + 1);
+        std::vector<std::string> lines;
+        if (blockHi - blockLo > 0) {
+            lines = buffer_.getRawLines(blockLo, blockHi - blockLo);
+        }
+        for (size_t i = 0; i < lines.size(); i++) {
+            size_t idx = blockLo + i;
+            if ((idx & 0x3FF) == 0) {
+                int ch = getch();
+                if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
+                    ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
+                    cancelled = true;
+                    break;
+                }
+                reportProgress(idx);
+            }
+            if (g_interrupted) { cancelled = true; break; }
+            const std::string& raw = lines[i];
+            if (!filterStack_.candidateInRaw(raw)) continue;
+            LogLine line = parser.parseLine(raw);
+            if (filterStack_.matches(line, idx)) {
+                result.push_back(idx);
+            }
+        }
+        if (cancelled) break;
     }
     return result;
 }
 
-size_t Viewer::findConnectionStart(size_t fromLine, const std::string& connId) {
-    // Walk back to the first line carrying this conn id, bounded so a
-    // huge file (or a connection with no ACCEPT/closed markers) can't
-    // turn this loop into a multi-second UI freeze.  Cheap raw-line
-    // substring test — no full LogLine parse per line.
-    const std::string needle = "conn=" + connId;
-    const size_t MAX_BACK = 20000;
-    size_t stop = fromLine > MAX_BACK ? fromLine - MAX_BACK : 0;
+bool Viewer::findConnRange(size_t fromLine, const std::string& connId,
+                           size_t& connStart, size_t& connEnd,
+                           std::vector<size_t>* outMatches) {
+    const size_t total = buffer_.getTotalLines();
+    if (total == 0) {
+        connStart = 0;
+        connEnd = 0;
+        return true;
+    }
+    if (fromLine >= total) fromLine = total - 1;
 
-    for (size_t i = fromLine; i > stop; i--) {
-        size_t lineIdx = i - 1;
-        auto raw = buffer_.getRawLine(lineIdx);
-        if (raw && raw->find(needle) != std::string::npos) {
-            return lineIdx;
+    // The only correct bound for an interleaved connection is the
+    // exact first/last line carrying the conn id.  Growing-window
+    // guesses truncate the range when the connection has gaps wider
+    // than the window, silently dropping lines from the filter.  So
+    // scan sequentially; show progress and allow Esc to cancel.
+    showPopup("Locating connection... (Esc to cancel)", 0.0f);
+    touchwin(mainWindow_);
+    wnoutrefresh(mainWindow_);
+    touchwin(filterWindow_);
+    wnoutrefresh(filterWindow_);
+    touchwin(statusWindow_);
+    wnoutrefresh(statusWindow_);
+    doupdate();
+
+    nodelay(stdscr, TRUE);
+    g_interrupted = 0;
+
+    bool cancelled = false;
+    auto lastUpdate = std::chrono::steady_clock::now();
+    int lastPct = -1;
+
+    auto reportProgress = [&](size_t done, size_t span) {
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastUpdate < std::chrono::milliseconds(100)) return;
+        lastUpdate = now;
+        int pct = span > 0 ? (int)(((double)done * 100.0) / (double)span) : 0;
+        if (pct != lastPct) {
+            lastPct = pct;
+            popupMessage_ = "Scanning connection... " + std::to_string(pct) + "%";
+            popupProgress_ = pct / 100.0f;
+            drawPopup();
+        }
+    };
+
+    connStart = fromLine;
+    connEnd = fromLine;
+
+    // Both directions are scanned in 4096-line blocks fetched with one
+    // grouped disk read each (getRawLines).  Walking a raw line one by
+    // one through getRawLine would reload a 4096-line page from disk
+    // for every line once the page boundary is crossed — quadratic
+    // disk I/O on multi-million-line logs, freezing the UI for
+    // minutes.
+    constexpr size_t kScanBlock = 4096;
+    const size_t backSpan = fromLine + 1;
+
+    auto collectMatch = [&](size_t idx) {
+        if (outMatches) {
+            outMatches->push_back(idx);
+        }
+    };
+
+    size_t blockLo = (fromLine / kScanBlock) * kScanBlock;
+    while (!cancelled) {
+        size_t blockHi = std::min(blockLo + kScanBlock, fromLine + 1);
+        std::vector<std::string> lines = buffer_.getRawLines(blockLo, blockHi - blockLo);
+        size_t idx = blockLo + lines.size();
+        while (idx > blockLo) {
+            --idx;
+            if (rawHasExactConn(lines[idx - blockLo], connId)) {
+                connStart = idx;
+                collectMatch(idx);
+            }
+            if ((idx & 0x3FF) == 0) {
+                int ch = getch();
+                if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
+                    ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
+                    cancelled = true;
+                    break;
+                }
+                reportProgress(blockHi - (idx + 1), total);
+            }
+        }
+        if (blockLo == 0) break;
+        if (!lines.empty()) blockLo -= kScanBlock;
+        else break;
+    }
+
+    if (!cancelled) {
+        size_t blockHi = ((fromLine + 1) / kScanBlock) * kScanBlock;
+        while (blockHi < total && !cancelled) {
+            size_t lo = std::max(blockHi, fromLine + 1);
+            std::vector<std::string> lines = buffer_.getRawLines(lo, std::min(blockHi + kScanBlock, total) - lo);
+            for (size_t i = 0; i < lines.size(); ++i) {
+                size_t idx = lo + i;
+                if (rawHasExactConn(lines[i], connId)) {
+                    connEnd = idx;
+                    collectMatch(idx);
+                }
+                if ((idx & 0x3FF) == 0) {
+                    int ch = getch();
+                    if (ch == 27 || ch == KEY_BACKSPACE || ch == 127 || ch == 8 ||
+                        ch == 'q' || ch == 'Q' || ch == 3 || ch == 28) {
+                        cancelled = true;
+                        break;
+                    }
+                    reportProgress(backSpan + (idx - fromLine), total);
+                }
+            }
+            blockHi += kScanBlock;
         }
     }
-    return fromLine;
-}
 
-size_t Viewer::findConnectionEnd(size_t fromLine, const std::string& connId) {
-    size_t totalLines = buffer_.getTotalLines();
-
-    // Walk forward to the last line carrying this conn_id, bounded
-    // (see findConnectionStart).  Never fall back to the end of the
-    // file: that would turn the range into "whole file" and the
-    // filter rebuild into a full log scan.
-    const std::string needle = "conn=" + connId;
-    const size_t kMaxFwd = 20000;
-    size_t stop = fromLine + kMaxFwd < totalLines ? fromLine + kMaxFwd : totalLines;
-
-    size_t last = fromLine;
-    for (size_t i = fromLine; i < stop; i++) {
-        auto raw = buffer_.getRawLine(i);
-        if (raw && raw->find(needle) != std::string::npos) {
-            last = i;
-        }
+    // The backward pass walks from `fromLine` to 0, so its matches are
+    // in descending order; the forward pass is ascending.  Sort so the
+    // caller gets a strictly increasing index list for the filter view.
+    if (outMatches) {
+        std::sort(outMatches->begin(), outMatches->end());
+        outMatches->erase(std::unique(outMatches->begin(), outMatches->end()),
+                          outMatches->end());
     }
-    return last;
+
+    nodelay(stdscr, FALSE);
+    timeout(10);
+
+    if (cancelled) {
+        hidePopup();
+        return false;
+    }
+
+    hidePopup();
+    return true;
 }
 
 void Viewer::buildFilteredIndices() {
@@ -1987,6 +2176,10 @@ void Viewer::buildFilteredIndices() {
     }
 
     visibleIndices_ = std::move(newVisibleIndices);
+    finishFilterUpdate();
+}
+
+void Viewer::finishFilterUpdate() {
     recalculateScreenRows();
 
     // Hold the popup on screen for at least MIN_POPUP_MS so the user
