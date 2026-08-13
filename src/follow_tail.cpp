@@ -21,6 +21,7 @@
 
 #include "follow_tail.h"
 #include "log_parser.h"
+#include "banner.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -577,4 +578,6 @@ void FollowTailStdin::run() {
 
     restoreTerminal();
     std::cout << "\x1b[0m\n";
+    std::cout << embedded::BANNER_TEXT;
+    std::cout.flush();
 }

@@ -1,31 +1,29 @@
 // main.cpp
-
-/* 
-    SPDX-License-Identifier: AGPL-3.0-or-later
-    GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
-    Copyright (c) 2026 Manuel FLURY
-    All rights reserved.
-    
-    This file is part of slaptrack - an OpenLDAP Log Viewer.
-    
-    Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-or-later).
-    See the LICENSE file distributed with this work for full license text.
-    
-    THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-    THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
-    AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// GNU Affero General Public License v3.0 (https://www.gnu.org/licenses/agpl-3.0.txt)
+// Copyright (c) 2026 Manuel FLURY
+// All rights reserved.
+//
+// This file is part of slaptrack - an OpenLDAP Log Viewer (ANSI edition).
+//
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-or-later).
+// See the LICENSE file distributed with this work for full license text.
+//
+// Entry point: argument parsing, compression dispatch, and terminal
+// lifecycle.  The alternate screen + raw mode are entered by the viewer;
+// crash handlers guarantee Term::restore() even on SIGSEGV/SIGABRT.
 
 #include "viewer.h"
 #include "follow_tail.h"
 #include "compressed_io.h"
 #include "embedded.hpp"
+#include "banner.hpp"
+#include "ansi.hpp"
 #include "version.h"
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <iostream>
 #include <string>
 #include <unistd.h>
@@ -39,6 +37,26 @@ void cleanupTempFile() {
         unlink(g_tempFile.c_str());
         g_tempFile.clear();
     }
+}
+
+// Crash handlers: restore the terminal before dying.  SIGSEGV/SIGABRT
+// handlers re-raise the signal after restoring so the core dump /
+// exit status stays accurate.
+void crashHandler(int sig) {
+    Term::restore();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void installCrashHandlers() {
+    struct sigaction sa;
+    sa.sa_handler = crashHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
+    sigaction(SIGFPE, &sa, nullptr);
 }
 
 // Parse the --log-format argument (see LogFormat in log_parser.h).
@@ -64,7 +82,8 @@ bool parseLogFormat(const std::string& s, LogFormat& out) {
 #endif
 
 void printUsage(const char* program) {
-    std::cerr << program << " - an OpenLDAP Log Viewer v" << SLAPTRACK_VERSION << "\n";
+    std::cout << embedded::BANNER_TEXT;
+    std::cerr << program << " - an OpenLDAP Log Viewer (ANSI edition) v" << SLAPTRACK_VERSION << "\n";
     std::cerr << "\n";
     std::cerr << "Usage: " << program << " [-f] <logfile>\n";
     std::cerr << "       " << program << " [-f] -\n";
@@ -101,11 +120,11 @@ void printUsage(const char* program) {
     std::cerr << "\n";
     std::cerr << "Color schemas (F1-F8):\n";
     std::cerr << "  F1 Default  F2 Monochrome  F3 Solarized Light\n";
-    std::cerr << "  F4 Solarized Dark  F5 High Contrast  F6 Nord\n";
+    std::cerr << "  F4 Solarized Dark  F5 Monokai  F6 Nord\n";
     std::cerr << "  F7 Gruvbox  F8 Dracula\n";
     std::cerr << "\n";
     std::cerr << "Color legend (default schema):\n";
-    std::cerr << "  Cyan     Timestamp\n";
+    std::cerr << "  Blue     Timestamp\n";
     std::cerr << "  Yellow   Connection ID (conn=)\n";
     std::cerr << "  Purple   Operation ID (op=)\n";
     std::cerr << "  Green    Distinguished Name (dn=)\n";
@@ -150,7 +169,8 @@ int main(int argc, char* argv[]) {
             printUsage(argv[0]);
             return 0;
         } else if (arg == "-V" || arg == "--version") {
-            std::cout << "slaptrack v" << SLAPTRACK_VERSION << " (built " << SLAPTRACK_BUILD << ") - an OpenLDAP Log Viewer\n";
+            std::cout << "slaptrack v" << SLAPTRACK_VERSION
+                      << " (built " << SLAPTRACK_BUILD << ") - an OpenLDAP Log Viewer (ANSI)\n";
             return 0;
         } else {
             filename = arg;
@@ -191,6 +211,8 @@ int main(int argc, char* argv[]) {
         std::atexit(cleanupTempFile);
         effectivePath = tempPath;
     }
+
+    installCrashHandlers();
 
     if (followMode) {
         FollowTail tail(effectivePath, /*schema*/ 0, logFormat);

@@ -715,7 +715,7 @@ live follow mode, compressed log support, and 8 switchable colour schemas.
 - **Live follow mode** (`-f`): streams new log lines as they arrive, with log-rotation recovery via inotify
 - **Compressed log support**: automatic detection and decompression of gzip, bzip2, and xz files
 - **Pipe mode**: `tail -f log | slaptrack -` or `slaptrack -` for use in pipelines
-- **8 colour schemas** (F1-F8): Default, Monochrome, Solarized Light/Dark, High Contrast, Nord, Gruvbox, Dracula
+- **8 colour schemas** (F1-F8): Default, Monochrome, Solarized Light/Dark, Monokai, Nord, Gruvbox, Dracula
 - **Auto-detection**: falls back to Monochrome schema on terminals with < 8 colours
 - **Cursor token tracking**: move the cursor within a line to highlight and filter by the token under it
 - **Mouse support**: scroll, click to move cursor, double-click to filter
@@ -905,13 +905,16 @@ Press **F1-F8** to switch between colour schemas:
 | F2 | Monochrome | White on black, bold for important tokens |
 | F3 | Solarized Light | Light background, warm accent colours |
 | F4 | Solarized Dark | Dark background, muted accent colours |
-| F5 | High Contrast | Black text on white background |
+| F5 | Monokai | High-contrast dark, vivid accents |
 | F6 | Nord | Cool grey-blue palette |
 | F7 | Gruvbox | Retro warm palette |
 | F8 | Dracula | Purple-pink accent palette |
 
-All schemas use the 8 ANSI basic colours for maximum compatibility with older
-terminals (including RHEL 8's ncurses 5.9).
+Schemas are built from the 8 hand-tuned palettes in the Default, Monochrome,
+Solarized Light, Solarized Dark, Monokai, Nord, Gruvbox and Dracula families,
+rendered in truecolor when available (`COLORTERM=truecolor/24bit`) with a
+256-colour cube fallback, and fall back to the Monochrome schema on terminals
+with fewer than 8 colours.
 
 The current schema name is shown in the status bar.
 

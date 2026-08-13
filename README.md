@@ -1,10 +1,22 @@
-# slaptrack - OpenLDAP Log Viewer
+# slaptrack - OpenLDAP Log Viewer (pure ANSI edition)
 
-An interactive terminal-based log viewer for OpenLDAP (slapd) logs with colorization, filtering, and real-time follow mode.
+An interactive terminal-based log viewer for OpenLDAP (slapd) logs with
+colorization, filtering, and real-time follow mode — built **without ncurses**,
+using only raw ANSI escape sequences (the methodology described in
+[TUI-ANSI-METHODOLOGY.en.md](../TUI-ANSI-METHODOLOGY.en.md)).
+
+Same features as the ncurses edition (`slaptrack`), same architecture, same
+test suite — the only difference is the rendering layer:
+
+- `ncurses` → raw ANSI (`ESC[` sequences, alternate screen, SGR mouse)
+- one frame = one big string + a single flush (wrapped in sync `ESC[?2026h/l`)
+- keyboard + mouse input parsed from raw `ESC[`/`ESC O` sequences (no `wgetch`)
+- terminal restored on exit, including on crashes (SIGSEGV/SIGABRT handlers)
 
 ## Features
 
 - **Colorized display** - Different log components are color-coded for easy reading
+- **8 color schemas** - F1-F8: Default, Monochrome, Solarized Light, Solarized Dark, Monokai, Nord, Gruvbox, Dracula
 - **Compressed logs** - Transparent support for `.gz`, `.bz2`, `.xz` (auto-detected by magic bytes)
 - **Interactive filtering** - Click on connection IDs, thread IDs, DNs, or other tokens to filter
 - **Filter chaining** - Apply multiple filters in sequence (e.g., filter by conn, then by dn)
@@ -12,16 +24,25 @@ An interactive terminal-based log viewer for OpenLDAP (slapd) logs with coloriza
 - **Follow mode** - Real-time monitoring like `tail -f` with automatic scroll
 - **Line numbers** - Toggle display with `#` key
 - **Horizontal scroll** - `←/→` (or `h/l`) scroll long lines that exceed the terminal width
-- **Mouse support** - Scroll wheel navigation, click to move cursor, double-click to filter
+- **Mouse support** - SGR mouse: scroll wheel navigation, click to move cursor, double-click to filter
 - **Search** - Full-text search with next/previous navigation
 - **Vim-like navigation** - Supports hjkl, g/G, and other vim shortcuts
 - **Read-only** - Safe for viewing production logs
 - **Streaming architecture** - Handles huge files efficiently with on-demand parsing
+- **No ncurses dependency** - only zlib/bzip2/xz + a POSIX terminal
 
 ## Building
 
 ```bash
-make clean && make
+make clean && make          # Makefile (colorized output; QUIET=true to disable colors)
+make test                   # run the unit tests (43 tests)
+make banner                 # print the ANSI logo
+```
+
+CMake is also supported:
+
+```bash
+cmake -S . -B build-cmake && cmake --build build-cmake
 ```
 
 ## Usage
@@ -91,17 +112,18 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 
 | Key | Action |
 |-----|--------|
+| `F1`-`F8` | Switch color schema |
 | `#` | Toggle line numbers |
 | `q` | Quit |
 
-## Color Legend
+## Color Legend (Default schema)
 
 | Color | Component |
 |-------|-----------|
-| Cyan | Timestamp |
+| Blue | Timestamp |
 | Yellow | Connection ID (conn=) |
-| Magenta | Operation ID (op=) |
-| Magenta | Thread ID (0x...) |
+| Purple | Operation ID (op=) |
+| Purple | Thread ID (0x...) |
 | Green | Distinguished Name (dn=) |
 | Yellow | Filter expression |
 | Blue | IP Address |
@@ -149,6 +171,22 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 
 ## Architecture
 
+### Rendering (ANSI methodology)
+- **No ncurses** - the whole UI is built from raw `ESC[` sequences:
+  `Fx` (SGR styles), `Mv` (cursor movement), `Term` (alternate screen,
+  mouse modes, sync start/end, termios raw mode)
+- **One frame = one string** - `renderFrame()` builds the entire screen
+  into a single `std::string`, `flushFrame()` writes it once wrapped in
+  `ESC[?2026h` / `ESC[?2026l` (synchronized output), then a single flush
+- **UTF-8 aware** - column math uses `ulen`/`wide_ulen` (wcwidth), so
+  wide glyphs don't break layout
+- **Input parsing** - `Input::pollKey()` reads raw bytes and parses
+  `ESC[`/`ESC O` sequences (arrows, F1-F8, PageUp/Down, Home/End) plus
+  SGR mouse (`ESC[<b;x;yM/m`, wheel = buttons 64/65, motion = bit 5)
+- **Crash-safe restore** - SIGSEGV/SIGABRT/SIGBUS/SIGFPE handlers call
+  `Term::restore()` before re-raising, so the terminal is never left raw
+- **Resize** - SIGWINCH handler triggers `Term::refresh()` + full redraw
+
 ### Streaming Design
 - **LogIndex** - Builds byte-offset index for fast random access (~11MB for 1.37M lines)
 - **LogBuffer** - Keeps only ~2000 parsed lines in memory around current view
@@ -170,40 +208,49 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 
 - C++17 compiler (GCC 8+, Clang 5+)
 - Linux (uses inotify for follow mode)
-- ncurses development headers
+- **No ncurses** - only a POSIX terminal (xterm-256color / tmux / kitty / etc.)
 - zlib, bzip2, and xz/lzma development libraries (for compressed log support)
 
 ### Install dependencies per distribution
 
 | Distribution | Command |
 |--------------|---------|
-| Fedora / RHEL 9+ | `sudo dnf install gcc-c++ ncurses-devel zlib-devel bzip2-devel xz-devel` |
-| RHEL 8 (EPEL) | `sudo dnf install gcc-toolset-12-gcc-c++ ncurses-devel zlib-devel bzip2-devel xz-devel` |
-| Debian / Ubuntu | `sudo apt install g++ libncurses-dev zlib1g-dev libbz2-dev liblzma-dev` |
-| Arch / Manjaro | `sudo pacman -S gcc ncurses zlib bzip2 xz` |
-| openSUSE Leap/Tumbleweed | `sudo zypper install gcc-c++ ncurses-devel zlib-devel libbz2-devel xz-devel` |
-| Alpine | `sudo apk add g++ ncurses-dev zlib-dev bzip2-dev xz-dev` |
+| Fedora / RHEL 9+ | `sudo dnf install gcc-c++ zlib-devel bzip2-devel xz-devel` |
+| RHEL 8 (EPEL) | `sudo dnf install gcc-toolset-12-gcc-c++ zlib-devel bzip2-devel xz-devel` |
+| Debian / Ubuntu | `sudo apt install g++ zlib1g-dev libbz2-dev liblzma-dev` |
+| Arch / Manjaro | `sudo pacman -S gcc zlib bzip2 xz` |
+| openSUSE Leap/Tumbleweed | `sudo zypper install gcc-c++ zlib-devel libbz2-devel xz-devel` |
+| Alpine | `sudo apk add g++ zlib-dev bzip2-dev xz-dev` |
 
 ## Project Structure
 
 ```
 slaptrack/
-├── Makefile
+├── Makefile             # Colorized build (section 12 of the ANSI methodology)
+├── CMakeLists.txt       # Alternative build (single source of truth for version)
+├── ansi_banner.utf8     # ANSI logo (256-color gradient), printed by `make banner`
 ├── src/
-│   ├── main.cpp            # Entry point, argument parsing, compression dispatch
+│   ├── main.cpp         # Entry point, argument parsing, compression dispatch, crash handlers
+│   ├── ansi.hpp         # Fx / Mv / Term namespaces (raw ANSI primitives)
+│   ├── utf8.h/cpp       # UTF-8 width-aware helpers (ulen, wide_ulen, ljust/rjust, uresize)
+│   ├── symbols.hpp      # Box-drawing / TTY fallback symbols
+│   ├── theme.h/cpp      # 8 color schemas, Theme::c(), truecolor gradient, hexToColor
+│   ├── widgets.h/cpp    # Draw::createBox, Meter, progressBar (with caches)
+│   ├── input.h/cpp      # Raw keyboard + SGR mouse parsing (replaces wgetch)
+│   ├── viewer.h/cpp     # TUI rendering (frame = one string) and interaction
 │   ├── compressed_io.h/cpp # Magic-byte detection + gzip/bzip2/xz decompression
-│   ├── log_parser.h/cpp    # Log parsing and tokenization
-│   ├── log_index.h/cpp     # File indexing for random access
-│   ├── log_buffer.h/cpp    # Rolling window buffer
-│   ├── viewer.h/cpp        # TUI rendering and interaction
-│   └── filter.h/cpp        # Filter management
-└── logs/                   # Sample log files
+│   ├── log_parser.h/cpp # Log parsing and tokenization
+│   ├── log_index.h/cpp  # File indexing for random access
+│   ├── log_buffer.h/cpp # Rolling window buffer
+│   └── filter.h/cpp     # Filter management
+└── tests/               # Unit tests (test_log_parser, test_filter)
 ```
 
 ## Compressed Log Handling
 
-When given a file, `slaptrack` reads the first bytes to detect the compression
-format rather than trusting the filename extension.  The supported formats are:
+When given a file, `slaptrack` reads the first bytes to detect the
+compression format rather than trusting the filename extension.  The supported
+formats are:
 
 | Magic bytes | Format |
 |-------------|--------|
