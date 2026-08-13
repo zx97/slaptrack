@@ -226,7 +226,7 @@ tail -f /var/log/slapd/access.log | ./build/slaptrack - --log-format syslog-utc
 
 ```
 slaptrack/
-├── Makefile             # Colorized build (section 12 of the ANSI methodology)
+├── Makefile             # Colorized build (section 13 of the ANSI methodology)
 ├── CMakeLists.txt       # Alternative build (single source of truth for version)
 ├── ansi_banner.utf8     # ANSI logo (256-color gradient), printed by `make banner`
 ├── src/
