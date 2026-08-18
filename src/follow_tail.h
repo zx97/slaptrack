@@ -46,13 +46,14 @@ private:
     int setupInotify();
     bool drainInotify();
     void readAndPrintNewLines();
-    void reopenAfterRotation();
+    bool reopenAfterRotation();
 
     std::string filename_;
     int fd_;
     int inotifyFd_;
     int watchFd_;
     long lastSize_;
+    bool fileMissing_ = false;
     bool terminalRaw_;
     int schema_;
     LogFormat logFormat_ = LogFormat::AUTO;

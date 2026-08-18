@@ -181,10 +181,9 @@ void FollowTail::printLastLines(int n) {
     const long CHUNK = 4096;
     long pos = st.st_size;
     int found = 0;
-    std::string tail;
 
-    // Walk backwards from EOF in 4 KB chunks until we have N newlines
-    // or hit the start of the file.
+    // Walk backwards from EOF in 4 KB chunks to locate the start of the
+    // last N lines.
     while (pos > 0 && found <= n) {
         long readSize = std::min<long>(CHUNK, pos);
         pos -= readSize;
@@ -200,14 +199,13 @@ void FollowTail::printLastLines(int n) {
             }
         }
         if (found > n) break;
-        tail = buf + tail;
     }
 
     if (pos < 0) pos = 0;
     lseek(fd_, pos, SEEK_SET);
 
-    // Read forward to EOF and split into lines, printing each.
-    std::string leftover = tail;
+    // Read forward from the located offset to EOF and print each line.
+    std::string leftover;
     char readBuf[CHUNK];
     while (true) {
         ssize_t r = read(fd_, readBuf, sizeof(readBuf));
@@ -309,18 +307,24 @@ void FollowTail::readAndPrintNewLines() {
     }
 }
 
-void FollowTail::reopenAfterRotation() {
+bool FollowTail::reopenAfterRotation() {
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
     if (watchFd_ >= 0 && inotifyFd_ >= 0) {
         inotify_rm_watch(inotifyFd_, watchFd_);
         watchFd_ = -1;
     }
-    // Reopen by name in case the inode changed.
+    // Reopen by name in case the inode changed; the new file may not
+    // exist yet during the logrotate window, so retry until it appears.
     fd_ = open(filename_.c_str(), O_RDONLY);
     if (fd_ < 0) {
-        std::cerr << "\r\n[file disappeared: " << strerror(errno) << "]\r\n";
-        return;
+        if (!fileMissing_) {
+            std::cerr << "\r\n[file disappeared: " << strerror(errno)
+                      << ", waiting for it to reappear...]\r\n";
+            fileMissing_ = true;
+        }
+        return false;
     }
+    fileMissing_ = false;
     if (inotifyFd_ >= 0) {
         watchFd_ = inotify_add_watch(inotifyFd_, filename_.c_str(),
                                      IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
@@ -329,6 +333,7 @@ void FollowTail::reopenAfterRotation() {
     // Print the last 10 lines of the new file to preserve context.
     std::cout << "\x1b[2m\x1b[37m--- log rotated, showing last 10 lines of new file ---\x1b[0m\n";
     printLastLines(10);
+    return true;
 }
 
 void FollowTail::run() {
@@ -409,8 +414,13 @@ void FollowTail::run() {
         }
         if (ret == 0) {
             // Periodic size poll as a fallback for filesystems / kernels
-            // that batch inotify events.
-            readAndPrintNewLines();
+            // that batch inotify events.  Retry reopen here so a rotated-away
+            // file is picked up again once it reappears.
+            if (fd_ < 0) {
+                reopenAfterRotation();
+            } else {
+                readAndPrintNewLines();
+            }
             continue;
         }
 
