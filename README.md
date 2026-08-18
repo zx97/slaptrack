@@ -2,8 +2,7 @@
 
 An interactive terminal-based log viewer for OpenLDAP (slapd) logs with
 colorization, filtering, and real-time follow mode — built **without ncurses**,
-using only raw ANSI escape sequences (the methodology described in
-[TUI-ANSI-METHODOLOGY.en.md](../TUI-ANSI-METHODOLOGY.en.md)).
+using only raw ANSI escape sequences.
 
 Same features as the ncurses edition (`slaptrack`), same architecture, same
 test suite — the only difference is the rendering layer:
