@@ -63,9 +63,11 @@ inline std::string reset = "\x1b[0m";
 
 namespace Mv {
 
-// Absolute move: line (1-based), column (1-based)
+// Absolute move: line (1-based), column (1-based).  Uses CUP (CSI n;m H),
+// the most widely supported cursor-positioning sequence (HVP, CSI n;m f,
+// is mishandled by some terminals such as Konsole).
 inline std::string to(int line, int col) {
-    return "\x1b[" + std::to_string(line) + ";" + std::to_string(col) + "f";
+    return "\x1b[" + std::to_string(line) + ";" + std::to_string(col) + "H";
 }
 
 // Relative moves
