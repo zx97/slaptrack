@@ -335,7 +335,9 @@ void Viewer::renderFrame(std::string& out) {
     renderFilterBar(out);
     renderStatusBar(out);
 
-    if (showPopup_) {
+    if (showHelp_) {
+        renderHelpPopup(out);
+    } else if (showPopup_) {
         renderPopup(out);
     } else {
         out += cursorMoveString();
@@ -463,7 +465,7 @@ void Viewer::renderStatusBar(std::string& out) {
         }
     }
 
-    std::string help = "[F1-8] [Enter]Filter [Esc]Back [/]Search [#]Num [h/l]Scroll [q]Quit ";
+    std::string help = "[F1-8] [Enter]Filter [Esc]Back [/]Search [n/N]Next [#]Num [h/l]Scroll [?]Help [q]Quit ";
 
     int padding = termWidth_ - (int)status.length() - (int)help.length();
     if (padding < 0) padding = 0;
@@ -518,6 +520,46 @@ void Viewer::renderPopup(std::string& out) {
     out += Mv::to(startY + 3, barX) + bar + Fx::reset;
 }
 
+void Viewer::renderHelpPopup(std::string& out) {
+    static const char* lines[] = {
+        "Navigation",
+        "  Up/Down or j/k    move cursor",
+        "  Left/Right or h/l move / scroll",
+        "  PgUp/PgDn         page",
+        "  Home/End or g/G   top / bottom",
+        "  #                 line numbers",
+        "",
+        "Filtering",
+        "  Enter             filter by token",
+        "  Esc / Backspace   remove last filter",
+        "  double-click      filter by token",
+        "",
+        "Search",
+        "  /                 search",
+        "  n / N             next / previous",
+        "",
+        "Display",
+        "  F1-F8             color schema",
+        "  q                 quit",
+    };
+    const int nLines = (int)(sizeof(lines) / sizeof(lines[0]));
+    int popupWidth = 42;
+    int popupHeight = nLines + 2;
+    int startY = (termHeight_ - popupHeight) / 2;
+    int startX = (termWidth_ - popupWidth) / 2;
+    if (startY < 1 || popupHeight > termHeight_) startY = 1;
+    if (startX < 1) startX = 1;
+
+    out += Draw::createBox(startX, startY, popupWidth, popupHeight,
+                           Theme::divLine(), true, " slaptrack ");
+
+    for (int i = 0; i < nLines; i++) {
+        out += Mv::to(startY + 1 + i, startX + 2) + Theme::mainFg()
+             + Tools::uresize(lines[i], (size_t)(popupWidth - 4), false)
+             + Fx::reset;
+    }
+}
+
 void Viewer::showPopup(const std::string& message, float progress) {
     popupMessage_ = message;
     popupProgress_ = progress;
@@ -566,6 +608,12 @@ void Viewer::handleInput() {
 
     if (ev.key == Input::Key::MOUSE) {
         handleMouseEvent(ev);
+        return;
+    }
+
+    if (showHelp_) {
+        showHelp_ = false;
+        fullRedraw();
         return;
     }
 
@@ -622,6 +670,10 @@ void Viewer::handleInput() {
                     fullRedraw();
                     break;
                 case ':': readCommandMode(':'); break;
+                case '?':
+                    showHelp_ = true;
+                    fullRedraw();
+                    break;
                 case '^': moveCursorToLineStart(); break;
                 case '$': moveCursorToLineEnd(); break;
                 default: break;
@@ -1210,6 +1262,7 @@ void Viewer::moveCursorUp() {
     if (cursorRow_ > 0) {
         int oldCursorRow = cursorRow_;
         cursorRow_--;
+        clampCursorColumn();
         if (cursorRow_ < scrollOffset_) {
             scrollOffset_ = cursorRow_;
             fullRedraw();
@@ -1231,6 +1284,7 @@ void Viewer::moveCursorDown() {
     if (cursorRow_ < (int)visibleIndices_.size() - 1) {
         int oldCursorRow = cursorRow_;
         cursorRow_++;
+        clampCursorColumn();
         if (cursorRow_ >= scrollOffset_ + contentHeight) {
             scrollOffset_ = cursorRow_ - contentHeight + 1;
             fullRedraw();
@@ -1247,10 +1301,24 @@ void Viewer::moveCursorDown() {
     }
 }
 
+void Viewer::clampCursorColumn() {
+    if (cursorRow_ < 0 || cursorRow_ >= (int)visibleIndices_.size()) return;
+    auto line = buffer_.getLine(visibleIndices_[cursorRow_]);
+    if (!line) return;
+    long lineLen = (long)line->raw.length();
+    long absCol = (long)cursorCol_ + horizontalOffset_;
+    if (absCol > lineLen) {
+        absCol = lineLen;
+        cursorCol_ = (int)(absCol - horizontalOffset_);
+        if (cursorCol_ < 0) cursorCol_ = 0;
+    }
+}
+
 void Viewer::pageUp() {
     int contentHeight = termHeight_ - 2;
     cursorRow_ = std::max(0, cursorRow_ - contentHeight);
     scrollOffset_ = std::max(0, scrollOffset_ - contentHeight);
+    clampCursorColumn();
     if (cursorRow_ < (int)visibleIndices_.size()) {
         buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
@@ -1262,6 +1330,7 @@ void Viewer::pageDown() {
     cursorRow_ = std::min((int)visibleIndices_.size() - 1, cursorRow_ + contentHeight);
     scrollOffset_ = std::min((int)visibleIndices_.size() - 1, scrollOffset_ + contentHeight);
     if (scrollOffset_ < 0) scrollOffset_ = 0;
+    clampCursorColumn();
     if (cursorRow_ < (int)visibleIndices_.size()) {
         buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }
@@ -1272,6 +1341,7 @@ void Viewer::goToTop() {
     cursorRow_ = 0;
     scrollOffset_ = 0;
     autoScroll_ = false;
+    clampCursorColumn();
     if (!visibleIndices_.empty()) {
         buffer_.prefetchAround(visibleIndices_[0], 100);
     }
@@ -1283,6 +1353,7 @@ void Viewer::goToBottom() {
     cursorRow_ = (int)visibleIndices_.size() - 1;
     scrollOffset_ = std::max(0, (int)visibleIndices_.size() - contentHeight);
     autoScroll_ = followMode_;
+    clampCursorColumn();
     if (cursorRow_ < (int)visibleIndices_.size()) {
         buffer_.prefetchAround(visibleIndices_[cursorRow_], 100);
     }

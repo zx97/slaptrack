@@ -52,6 +52,7 @@ private:
     void renderFilterBar(std::string& out);
     void renderStatusBar(std::string& out);
     void renderPopup(std::string& out);
+    void renderHelpPopup(std::string& out);
     void flushFrame(const std::string& out);
 
     // Incremental: redraw a single visible row (cursor moves).
@@ -99,6 +100,7 @@ private:
 
     void moveCursorUp();
     void moveCursorDown();
+    void clampCursorColumn();
     void pageUp();
     void pageDown();
     void goToTop();
@@ -150,6 +152,8 @@ private:
     std::string popupMessage_;
     float popupProgress_ = 0.0f;
     bool filtering_ = false;
+
+    bool showHelp_ = false;
 
     int currentSchema_ = 0;
     bool autoColor_ = false;
