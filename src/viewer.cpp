@@ -308,6 +308,11 @@ void Viewer::fullRedraw() {
     out.reserve((size_t)termWidth_ * (size_t)termHeight_);
     renderFrame(out);
     flushFrame(out);
+    // Position the cursor after the synchronized update has been flushed,
+    // so every terminal (Konsole included) honors the move.
+    if (!showHelp_ && !showPopup_) {
+        moveCursorToScreen();
+    }
 }
 
 void Viewer::renderFrame(std::string& out) {
@@ -339,8 +344,6 @@ void Viewer::renderFrame(std::string& out) {
         renderHelpPopup(out);
     } else if (showPopup_) {
         renderPopup(out);
-    } else {
-        out += cursorMoveString();
     }
 }
 
@@ -1306,11 +1309,19 @@ void Viewer::clampCursorColumn() {
     auto line = buffer_.getLine(visibleIndices_[cursorRow_]);
     if (!line) return;
     long lineLen = (long)line->raw.length();
-    long absCol = (long)cursorCol_ + horizontalOffset_;
-    if (absCol > lineLen) {
-        absCol = lineLen;
-        cursorCol_ = (int)(absCol - horizontalOffset_);
-        if (cursorCol_ < 0) cursorCol_ = 0;
+    // cursorCol_ is a screen column; the absolute byte offset in the line
+    // is cursorCol_ + horizontalOffset_.  When moving onto a shorter line,
+    // reset the horizontal scroll and clamp the cursor to the end of the
+    // line so it never sits past the text.
+    if ((long)cursorCol_ + horizontalOffset_ > lineLen) {
+        horizontalOffset_ = 0;
+        cursorCol_ = (int)lineLen;
+    }
+    if (cursorCol_ > termWidth_ - 1) {
+        cursorCol_ = termWidth_ - 1;
+    }
+    if (cursorCol_ < 0) {
+        cursorCol_ = 0;
     }
 }
 
