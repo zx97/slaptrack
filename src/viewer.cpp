@@ -1129,6 +1129,8 @@ void Viewer::performSearch(const std::string& query) {
         cursorRow_ = (int)searchResults_[0];
         scrollOffset_ = std::max(0, (int)cursorRow_ - (termHeight_ / 2));
     }
+
+    hidePopup();
 }
 
 void Viewer::nextSearchResult() {
