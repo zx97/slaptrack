@@ -233,10 +233,35 @@ static bool isBoldToken(TokenType t) {
     }
 }
 
+void Viewer::appendHighlighted(std::string& out, const std::string& text,
+                               const std::string& baseStyle) {
+    if (text.empty()) return;
+    if (searchQuery_.empty()) {
+        out += baseStyle;
+        out += text;
+        return;
+    }
+    size_t pos = 0;
+    const size_t qlen = searchQuery_.size();
+    while (pos < text.size()) {
+        size_t found = text.find(searchQuery_, pos);
+        if (found == std::string::npos) {
+            out += baseStyle;
+            out += text.substr(pos);
+            break;
+        }
+        if (found > pos) {
+            out += baseStyle;
+            out += text.substr(pos, found - pos);
+        }
+        out += baseStyle + Theme::searchBg() + text.substr(found, qlen) + Fx::reset;
+        pos = found + qlen;
+    }
+}
+
 void Viewer::appendPlain(std::string& out, const std::string& text) {
     if (text.empty()) return;
-    out += Theme::mainFg();
-    out += text;
+    appendHighlighted(out, text, Theme::mainFg());
 }
 
 void Viewer::appendToken(std::string& out, const Token& token,
@@ -253,8 +278,7 @@ void Viewer::appendToken(std::string& out, const Token& token,
         style += Fx::rev;
     }
 
-    out += style;
-    out += token.value;
+    appendHighlighted(out, token.value, style);
     out += Fx::reset;
 }
 
@@ -314,7 +338,7 @@ void Viewer::renderFrame(std::string& out) {
     if (showPopup_) {
         renderPopup(out);
     } else {
-        moveCursorToScreen();
+        out += cursorMoveString();
     }
 }
 
@@ -450,10 +474,22 @@ void Viewer::renderStatusBar(std::string& out) {
 }
 
 void Viewer::moveCursorToScreen() {
+    std::string m = cursorMoveString();
+    if (!m.empty()) {
+        std::cout << m << std::flush;
+    }
+}
+
+std::string Viewer::cursorMoveString() {
     int screenRow = getScreenRowForCursorRow(cursorRow_);
-    if (screenRow < 0 || screenRow >= termHeight_ - 2) return;
-    // Place the real cursor at the current token position (best effort).
-    std::cout << Mv::to(screenRow + 1, cursorCol_ + 1) << std::flush;
+    if (screenRow < 0 || screenRow >= termHeight_ - 2) return {};
+    // Content starts after the line-number gutter, if shown.
+    int startCol = 0;
+    if (showLineNumbers_) {
+        size_t totalLines = buffer_.getTotalLines();
+        startCol = (int)std::to_string(totalLines).length() + 1;
+    }
+    return Mv::to(screenRow + 1, startCol + cursorCol_ + 1);
 }
 
 void Viewer::renderPopup(std::string& out) {
@@ -1126,32 +1162,47 @@ void Viewer::performSearch(const std::string& query) {
     fullRedraw();
 
     if (!searchResults_.empty()) {
-        cursorRow_ = (int)searchResults_[0];
-        scrollOffset_ = std::max(0, (int)cursorRow_ - (termHeight_ / 2));
+        jumpToSearchMatch(0);
     }
 
     hidePopup();
 }
 
-void Viewer::nextSearchResult() {
-    if (searchResults_.empty()) return;
-    currentSearchResult_ = (currentSearchResult_ + 1) % searchResults_.size();
-    cursorRow_ = (int)searchResults_[currentSearchResult_];
+void Viewer::jumpToSearchMatch(size_t resultIndex) {
+    if (resultIndex >= searchResults_.size()) return;
+    currentSearchResult_ = resultIndex;
+
+    size_t lineIdx = searchResults_[resultIndex];
+    cursorRow_ = (int)lineIdx;
     int contentHeight = termHeight_ - 2;
     if (cursorRow_ < scrollOffset_ || cursorRow_ >= scrollOffset_ + contentHeight) {
         scrollOffset_ = std::max(0, (int)cursorRow_ - contentHeight / 2);
     }
+
+    // Place the cursor on the first occurrence of the query in this line.
+    auto raw = buffer_.getRawLine(visibleIndices_[lineIdx]);
+    if (raw) {
+        size_t pos = raw->find(searchQuery_);
+        if (pos != std::string::npos) {
+            if ((int)pos < horizontalOffset_ || (int)pos >= horizontalOffset_ + termWidth_) {
+                horizontalOffset_ = (int)pos;
+            }
+            cursorCol_ = (int)pos - horizontalOffset_;
+            auto tokenIdx = getTokenIndexAtPosition(cursorRow_, cursorCol_ + horizontalOffset_);
+            if (tokenIdx.has_value()) currentTokenIndex_ = tokenIdx.value();
+        }
+    }
+}
+
+void Viewer::nextSearchResult() {
+    if (searchResults_.empty()) return;
+    jumpToSearchMatch((currentSearchResult_ + 1) % searchResults_.size());
     fullRedraw();
 }
 
 void Viewer::prevSearchResult() {
     if (searchResults_.empty()) return;
-    currentSearchResult_ = (currentSearchResult_ + searchResults_.size() - 1) % searchResults_.size();
-    cursorRow_ = (int)searchResults_[currentSearchResult_];
-    int contentHeight = termHeight_ - 2;
-    if (cursorRow_ < scrollOffset_ || cursorRow_ >= scrollOffset_ + contentHeight) {
-        scrollOffset_ = std::max(0, (int)cursorRow_ - contentHeight / 2);
-    }
+    jumpToSearchMatch((currentSearchResult_ + searchResults_.size() - 1) % searchResults_.size());
     fullRedraw();
 }
 

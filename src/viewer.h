@@ -56,6 +56,7 @@ private:
 
     // Incremental: redraw a single visible row (cursor moves).
     void redrawLine(int cursorRow, bool isHighlighted);
+    std::string cursorMoveString();
     void moveCursorToScreen();
 
     void handleInput();
@@ -73,6 +74,7 @@ private:
     void startSearch();
     void readCommandMode(char prompt);
     void performSearch(const std::string& query);
+    void jumpToSearchMatch(size_t resultIndex);
     void nextSearchResult();
     void prevSearchResult();
 
@@ -92,6 +94,8 @@ private:
     void appendToken(std::string& out, const Token& token,
                      bool isCurrentToken, bool isHovered);
     void appendPlain(std::string& out, const std::string& text);
+    void appendHighlighted(std::string& out, const std::string& text,
+                           const std::string& baseStyle);
 
     void moveCursorUp();
     void moveCursorDown();

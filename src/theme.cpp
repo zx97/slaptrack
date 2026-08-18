@@ -96,6 +96,9 @@ bool g_truecolor = false;
 // Background for popups (red on white in every schema, matching the
 // ncurses version's pair 17).
 std::string g_popup_bg = "\x1b[37;41m";
+// Background for search matches (hlsearch): yellow in colour mode,
+// reverse video when the terminal is monochrome.
+std::string g_search_bg = "\x1b[30;43m";
 
 // Truecolor gradient: green → yellow → red over [0,1].
 std::array<std::string, 101> g_gradient;
@@ -139,6 +142,7 @@ void rebuildCache() {
         g_cache[i] = code;
     }
     g_popup_bg = "\x1b[37;41m";
+    g_search_bg = g_tty ? "\x1b[7m" : "\x1b[30;43m";
 }
 
 } // namespace
@@ -202,6 +206,7 @@ const std::string& selectedBg()  { return c(TOK_POPUP); }
 const std::string& title()       { return c(TOK_BASE_TEXT); }
 const std::string& divLine()     { return c(TOK_TIMESTAMP); }
 const std::string& popupBg()     { return g_popup_bg; }
+const std::string& searchBg()    { return g_search_bg; }
 
 const std::string& gradient(float pct) {
     int idx = (int)(pct * 100.0f);

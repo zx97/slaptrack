@@ -163,9 +163,11 @@ inline void restore() {
               << Fx::reset_base << "\x1b[?2026l" << std::flush;
 }
 
-// Enter the alternate screen for a full-screen TUI.
+// Enter the alternate screen for a full-screen TUI.  The terminal cursor
+// is left visible so the user always sees where they are (blinking block
+// in most terminals); it is positioned each frame by moveCursorToScreen().
 inline void enterFullscreen() {
-    std::cout << alt_screen << hide_cursor << mouse_on << Fx::reset_base << std::flush;
+    std::cout << alt_screen << show_cursor << mouse_on << Fx::reset_base << std::flush;
 }
 
 // Exit the alternate screen (pair of enterFullscreen).

@@ -71,6 +71,7 @@ const std::string& selectedBg();
 const std::string& title();
 const std::string& divLine();
 const std::string& popupBg();
+const std::string& searchBg();
 
 // Gradient helpers for progress bars (0.0..1.0).  Returns an SGR escape
 // code interpolating through a green→yellow→red ramp in truecolor when
