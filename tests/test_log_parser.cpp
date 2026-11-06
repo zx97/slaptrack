@@ -76,11 +76,11 @@ TEST(parse_error_code) {
 }
 
 TEST(parse_ip_address) {
-    LogLine l = parse("conn=1000 fd=15 ACCEPT from IP=192.168.1.1:38900");
+    LogLine l = parse("conn=1000 fd=15 ACCEPT from IP=192.0.2.1:38900");
     bool found = false;
     for (const auto& t : l.tokens) {
         if (t.type == TokenType::IP_ADDRESS) {
-            CHECK_EQ(t.value, "IP=192.168.1.1:38900");
+            CHECK_EQ(t.value, "IP=192.0.2.1:38900");
             found = true;
         }
     }
